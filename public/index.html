@@ -291,9 +291,11 @@
     #picker-title {
       font-size: 15px; font-weight: 600; text-align: center;
       padding: 0 20px 12px; color: var(--text);
+      flex-shrink: 0;
     }
     #picker-search-wrap {
-      padding: 0 16px 10px;
+      padding: 4px 16px 10px;
+      flex-shrink: 0;
     }
     #picker-search {
       width: 100%; background: var(--card2); border: none; border-radius: 10px;
@@ -1003,7 +1005,7 @@ async function openPicker() {
 function closePicker() {
   $('picker-sheet').classList.remove('show');
   $('picker-search').blur();
-  $('picker-panel').style.transform = '';
+  $('picker-panel').style.maxHeight = '';
 }
 
 function buildPickerList(query) {
@@ -1089,14 +1091,13 @@ function buildPickerList(query) {
 $('picker-backdrop').addEventListener('click', closePicker);
 $('picker-search').addEventListener('input', e => buildPickerList(e.target.value));
 
-// ── Push panel above keyboard using visualViewport API ─────────────────────
+// ── Shrink panel height to fit above keyboard (keeps search bar visible) ───
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
     const sheet = $('picker-sheet');
     if (!sheet.classList.contains('show')) return;
-    const keyboardH = window.innerHeight - window.visualViewport.height;
-    $('picker-panel').style.transform = keyboardH > 50
-      ? `translateY(-${keyboardH}px)` : '';
+    const available = window.visualViewport.height;
+    $('picker-panel').style.maxHeight = `${Math.round(available * 0.92)}px`;
   });
 }
 
