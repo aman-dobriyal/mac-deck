@@ -221,6 +221,103 @@
     #apps-empty  { text-align: center; color: var(--text3); font-size: 14px; padding: 60px 0; display: none; }
     #apps-loading { text-align: center; color: var(--text3); font-size: 14px; padding: 60px 0; }
 
+    /* ── Pinned Dock ─────────────────────────────────────────────────────────── */
+    #dock-header {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; color: var(--text2);
+      padding: 18px 4px 10px;
+    }
+    #dock-edit-btn {
+      background: none; border: none; color: var(--accent);
+      font-size: 13px; font-weight: 600; cursor: pointer; padding: 2px 0;
+    }
+    #dock-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 14px; margin-bottom: 24px;
+    }
+    /* add-cell — the + button */
+    .dock-add-cell {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 8px;
+      cursor: pointer; user-select: none;
+      transition: opacity 0.12s, transform 0.1s;
+    }
+    .dock-add-cell:active { opacity: 0.6; transform: scale(0.91); }
+    .dock-add-icon {
+      width: 72px; height: 72px; border-radius: 18px;
+      background: var(--card2);
+      border: 2px dashed rgba(255,255,255,0.12);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text3);
+    }
+    .dock-add-label {
+      font-size: 11px; color: var(--text3); text-align: center;
+    }
+    /* remove badge on dock cells in edit mode */
+    .dock-cell { position: relative; }
+    .dock-remove-badge {
+      display: none; position: absolute; top: -4px; left: -4px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--red); color: #fff;
+      font-size: 14px; font-weight: 700; line-height: 20px; text-align: center;
+      z-index: 10; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    #dock-grid.editing .dock-remove-badge { display: block; }
+    #dock-grid.editing .app-cell { animation: wiggle 0.5s ease-in-out infinite alternate; }
+    @keyframes wiggle {
+      from { transform: rotate(-1.2deg); }
+      to   { transform: rotate(1.2deg); }
+    }
+
+    /* ── App picker sheet ───────────────────────────────────────────────────── */
+    #picker-sheet {
+      display: none; position: fixed; inset: 0; z-index: 100;
+    }
+    #picker-sheet.show { display: flex; flex-direction: column; justify-content: flex-end; }
+    #picker-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(6px);
+    }
+    #picker-panel {
+      position: relative; background: #1c1c1e;
+      border-radius: 20px 20px 0 0;
+      max-height: 72vh; display: flex; flex-direction: column;
+      padding-bottom: var(--safe-bot);
+    }
+    #picker-handle-wrap { padding: 14px 0 4px; display: flex; justify-content: center; }
+    .picker-handle { width: 36px; height: 4px; background: var(--fill); border-radius: 2px; }
+    #picker-title {
+      font-size: 15px; font-weight: 600; text-align: center;
+      padding: 0 20px 12px; color: var(--text);
+    }
+    #picker-search-wrap {
+      padding: 0 16px 10px;
+    }
+    #picker-search {
+      width: 100%; background: var(--card2); border: none; border-radius: 10px;
+      color: var(--text); font-size: 15px; padding: 10px 14px;
+      outline: none;
+    }
+    #picker-search::placeholder { color: var(--text3); }
+    #picker-list {
+      overflow-y: auto; padding: 0 0 16px;
+    }
+    .picker-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 20px; cursor: pointer; transition: background 0.1s;
+    }
+    .picker-item:active { background: rgba(255,255,255,0.06); }
+    .picker-item-icon {
+      width: 44px; height: 44px; border-radius: 11px;
+      background: var(--card2); flex-shrink: 0; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .picker-item-icon img { width: 100%; height: 100%; object-fit: cover; }
+    .picker-item-icon .app-initial { font-size: 20px; font-weight: 600; color: var(--text2); }
+    .picker-item-name { font-size: 16px; font-weight: 500; }
+    .picker-item.already-pinned { opacity: 0.35; pointer-events: none; }
+
 
     /* ── Install banner ───────────────────────────────────────────────────── */
     #install-banner {
@@ -449,6 +546,13 @@
     </button>
   </div>
 
+  <!-- Pinned Dock -->
+  <div id="dock-header">
+    <span>My Dock</span>
+    <button id="dock-edit-btn">Edit</button>
+  </div>
+  <div id="dock-grid"></div>
+
   <!-- Open Apps (inline) -->
   <div id="apps-header">Open Apps</div>
   <div id="apps-loading">Loading…</div>
@@ -456,6 +560,19 @@
   <div id="apps-grid"></div>
 
 </div><!-- /pg-controls -->
+
+<!-- ── App picker sheet ────────────────────────────────────────────────────── -->
+<div id="picker-sheet">
+  <div id="picker-backdrop"></div>
+  <div id="picker-panel">
+    <div id="picker-handle-wrap"><div class="picker-handle"></div></div>
+    <div id="picker-title">Add to Dock</div>
+    <div id="picker-search-wrap">
+      <input id="picker-search" type="search" placeholder="Search apps…" autocomplete="off">
+    </div>
+    <div id="picker-list"></div>
+  </div>
+</div>
 
 <!-- ── Screen dim overlay (pointer-events:none so taps pass through) ─────── -->
 <div id="dim-overlay"></div>
@@ -760,6 +877,179 @@ $('dim-up').addEventListener('click',   () => setDim(+$dimSlider.value + 10));
 
 /* ── Haptic ───────────────────────────────────────────────────────────────── */
 function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
+
+/* ── Pinned Dock ──────────────────────────────────────────────────────────── */
+let dock = JSON.parse(localStorage.getItem('mac-deck-dock') || '[]');
+let dockEditing = false;
+
+function saveDock() {
+  localStorage.setItem('mac-deck-dock', JSON.stringify(dock));
+}
+
+function renderDock() {
+  const grid = $('dock-grid');
+  grid.innerHTML = '';
+
+  dock.forEach((app, idx) => {
+    const cell = document.createElement('div');
+    cell.className = 'app-cell dock-cell';
+
+    // remove badge (visible in edit mode)
+    const badge = document.createElement('div');
+    badge.className = 'dock-remove-badge';
+    badge.textContent = '−';
+    badge.addEventListener('click', e => {
+      e.stopPropagation();
+      dock.splice(idx, 1);
+      saveDock();
+      renderDock();
+      vibrate(30);
+    });
+
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'app-cell-icon';
+    const img = document.createElement('img');
+    img.alt = app.name;
+    img.src = `/api/icon/${encodeURIComponent(app.iconName || app.name)}`;
+    img.onerror = () => {
+      img.remove();
+      const init = document.createElement('span');
+      init.className = 'app-initial';
+      init.textContent = app.name[0];
+      iconWrap.appendChild(init);
+    };
+    iconWrap.appendChild(img);
+
+    const label = document.createElement('div');
+    label.className = 'app-cell-name';
+    label.textContent = app.name;
+
+    cell.appendChild(badge);
+    cell.appendChild(iconWrap);
+    cell.appendChild(label);
+
+    cell.addEventListener('click', () => {
+      if (dockEditing) return;
+      cell.classList.add('switching');
+      send('launchApp', { appName: app.appName || app.name, appPath: app.appPath });
+      setTimeout(() => cell.classList.remove('switching'), 500);
+      vibrate(22);
+    });
+
+    grid.appendChild(cell);
+  });
+
+  // + add button (always last)
+  const addCell = document.createElement('div');
+  addCell.className = 'dock-add-cell';
+  addCell.innerHTML = `
+    <div class="dock-add-icon">
+      <svg class="ico" width="26" height="26"><use href="#i-plus"/></svg>
+    </div>
+    <div class="dock-add-label">Add App</div>`;
+  addCell.addEventListener('click', openPicker);
+  grid.appendChild(addCell);
+
+  // toggle wiggle
+  if (dockEditing) grid.classList.add('editing');
+  else grid.classList.remove('editing');
+}
+
+// Edit toggle
+$('dock-edit-btn').addEventListener('click', () => {
+  dockEditing = !dockEditing;
+  $('dock-edit-btn').textContent = dockEditing ? 'Done' : 'Edit';
+  renderDock();
+  vibrate(20);
+});
+
+/* ── App picker ───────────────────────────────────────────────────────────── */
+function openPicker() {
+  dockEditing = false;
+  $('dock-edit-btn').textContent = 'Edit';
+  renderDock();
+  buildPickerList('');
+  $('picker-sheet').classList.add('show');
+  $('picker-search').value = '';
+  setTimeout(() => $('picker-search').focus(), 200);
+  vibrate(20);
+}
+
+function closePicker() {
+  $('picker-sheet').classList.remove('show');
+  $('picker-search').blur();
+}
+
+function buildPickerList(query) {
+  const list = $('picker-list');
+  list.innerHTML = '';
+  const q = query.toLowerCase();
+
+  // Combine running apps + any previously pinned apps not currently running
+  const allApps = [...runningApps];
+  dock.forEach(d => {
+    if (!allApps.find(a => a.name === d.name)) allApps.push(d);
+  });
+
+  const filtered = allApps.filter(a =>
+    !a.chromeWindowIndex &&   // skip per-window chrome entries
+    (!q || a.name.toLowerCase().includes(q))
+  );
+
+  if (!filtered.length) {
+    list.innerHTML = `<div style="text-align:center;color:var(--text3);padding:40px 0;font-size:14px">No apps found</div>`;
+    return;
+  }
+
+  filtered.forEach(app => {
+    const alreadyPinned = !!dock.find(d => d.name === app.name);
+    const item = document.createElement('div');
+    item.className = 'picker-item' + (alreadyPinned ? ' already-pinned' : '');
+
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'picker-item-icon';
+    const img = document.createElement('img');
+    img.alt = app.name;
+    img.src = `/api/icon/${encodeURIComponent(app.iconName || app.name)}`;
+    img.onerror = () => {
+      img.remove();
+      const init = document.createElement('span');
+      init.className = 'app-initial';
+      init.textContent = app.name[0];
+      iconWrap.appendChild(init);
+    };
+    iconWrap.appendChild(img);
+
+    const name = document.createElement('div');
+    name.className = 'picker-item-name';
+    name.textContent = app.name + (alreadyPinned ? ' ✓' : '');
+
+    item.appendChild(iconWrap);
+    item.appendChild(name);
+
+    item.addEventListener('click', () => {
+      if (alreadyPinned) return;
+      dock.push({
+        name:    app.name,
+        appName: app.appName || app.name,
+        appPath: app.appPath || '',
+        iconName: app.iconName || app.name,
+      });
+      saveDock();
+      renderDock();
+      closePicker();
+      vibrate(40);
+    });
+
+    list.appendChild(item);
+  });
+}
+
+$('picker-backdrop').addEventListener('click', closePicker);
+$('picker-search').addEventListener('input', e => buildPickerList(e.target.value));
+
+// Initial render
+renderDock();
 
 /* ── Service Worker ───────────────────────────────────────────────────────── */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

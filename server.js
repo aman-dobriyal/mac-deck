@@ -53,6 +53,18 @@ function mediaKey(code) {
   return run(`MEDIA_KEY=${code} osascript -l JavaScript "${JXA_MEDIA_SCRIPT}" 2>/dev/null`);
 }
 
+// nowplaying-cli is the preferred media controller — works with Chrome, Spotify web,
+// YouTube Music, Twitch, Apple Music, etc. JXA is a fallback.
+const NOWPLAYING_CLI = ['/opt/homebrew/bin/nowplaying-cli', '/usr/local/bin/nowplaying-cli']
+  .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || null;
+
+async function mediaControl(npCmd, jxaCode) {
+  if (NOWPLAYING_CLI) {
+    try { await run(`${NOWPLAYING_CLI} ${npCmd} 2>/dev/null`); return; } catch {}
+  }
+  mediaKey(jxaCode);
+}
+
 // ─── Chrome window helpers ────────────────────────────────────────────────────
 function cleanChromeTitle(raw) {
   return raw
@@ -226,11 +238,10 @@ async function handleAction(action, payload = {}) {
       await run(`osascript -e "set s to get volume settings\nif output muted of s then\nset volume without output muted\nelse\nset volume with output muted\nend if"`);
       return getVolumeState();
 
-    // Media — use JXA to simulate the real system media key.
-    // Works with YouTube Music, Spotify Web, Twitch, Apple Music, Spotify desktop — anything.
-    case 'playPause': mediaKey(16); break; // NX_KEYTYPE_PLAY
-    case 'nextTrack': mediaKey(17); break; // NX_KEYTYPE_NEXT
-    case 'prevTrack': mediaKey(18); break; // NX_KEYTYPE_PREVIOUS
+    // Media — nowplaying-cli preferred, JXA fallback
+    case 'playPause': await mediaControl('togglePlayPause', 16); break;
+    case 'nextTrack': await mediaControl('next',            17); break;
+    case 'prevTrack': await mediaControl('previous',        18); break;
 
     case 'switchApp': {
       if (payload.chromeWindowIndex) {
@@ -245,6 +256,13 @@ async function handleAction(action, payload = {}) {
         const target = payload.appPath || payload.appName || payload.name;
         run(`osascript -e 'tell application "${target}" to activate'`);
       }
+      break;
+    }
+
+    case 'launchApp': {
+      // Opens app even if not currently running — used by the pinned dock
+      const target = payload.appPath || payload.appName || payload.name;
+      run(`open -a "${target.replace(/"/g, '\\"')}" 2>/dev/null`);
       break;
     }
 
