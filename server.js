@@ -282,6 +282,38 @@ async function handleAction(action, payload = {}) {
   return null;
 }
 
+// ─── All installed apps ───────────────────────────────────────────────────────
+let allAppsCache = null;
+function getAllApps() {
+  if (allAppsCache) return allAppsCache;
+  const dirs = [
+    '/Applications',
+    '/Applications/Utilities',
+    '/System/Applications',
+    '/System/Applications/Utilities',
+    `${os.homedir()}/Applications`,
+  ];
+  const seen = new Set();
+  const apps = [];
+  for (const dir of dirs) {
+    try {
+      fs.readdirSync(dir)
+        .filter(f => f.endsWith('.app'))
+        .forEach(f => {
+          const name = f.replace(/\.app$/, '');
+          if (seen.has(name)) return;
+          seen.add(name);
+          apps.push({ name, appPath: `${dir}/${f}`, appName: name });
+        });
+    } catch {}
+  }
+  apps.sort((a, b) => a.name.localeCompare(b.name));
+  allAppsCache = apps;
+  // Bust cache every 5 min in case user installs something
+  setTimeout(() => { allAppsCache = null; }, 5 * 60 * 1000);
+  return apps;
+}
+
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
@@ -300,6 +332,10 @@ const server = http.createServer(async (req, res) => {
   if (urlPath === '/api/version') {
     res.writeHead(200, { 'Content-Type': MIME['.json'] });
     return res.end(JSON.stringify({ version: SERVER_VERSION }));
+  }
+  if (urlPath === '/api/all-apps') {
+    res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'max-age=300' });
+    return res.end(JSON.stringify({ apps: getAllApps() }));
   }
   if (urlPath === '/api/running-apps') {
     const apps = await getRunningApps();

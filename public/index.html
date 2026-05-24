@@ -284,6 +284,7 @@
       border-radius: 20px 20px 0 0;
       max-height: 72vh; display: flex; flex-direction: column;
       padding-bottom: var(--safe-bot);
+      transition: transform 0.2s ease;
     }
     #picker-handle-wrap { padding: 14px 0 4px; display: flex; justify-content: center; }
     .picker-handle { width: 36px; height: 4px; background: var(--fill); border-radius: 2px; }
@@ -975,45 +976,62 @@ $('dock-edit-btn').addEventListener('click', () => {
 });
 
 /* ── App picker ───────────────────────────────────────────────────────────── */
-function openPicker() {
+let allInstalledApps = [];   // loaded once from /api/all-apps
+
+async function loadAllApps() {
+  if (allInstalledApps.length) return;
+  try {
+    const r = await fetch('/api/all-apps');
+    const j = await r.json();
+    allInstalledApps = j.apps || [];
+  } catch {}
+}
+
+async function openPicker() {
   dockEditing = false;
   $('dock-edit-btn').textContent = 'Edit';
   renderDock();
-  buildPickerList('');
-  $('picker-sheet').classList.add('show');
   $('picker-search').value = '';
-  setTimeout(() => $('picker-search').focus(), 200);
+  $('picker-list').innerHTML = `<div style="text-align:center;color:var(--text3);padding:40px 0;font-size:14px">Loading…</div>`;
+  $('picker-sheet').classList.add('show');
   vibrate(20);
+  await loadAllApps();
+  buildPickerList('');
+  setTimeout(() => $('picker-search').focus(), 120);
 }
 
 function closePicker() {
   $('picker-sheet').classList.remove('show');
   $('picker-search').blur();
+  $('picker-panel').style.transform = '';
 }
 
 function buildPickerList(query) {
   const list = $('picker-list');
   list.innerHTML = '';
-  const q = query.toLowerCase();
+  const q = query.toLowerCase().trim();
 
-  // Combine running apps + any previously pinned apps not currently running
-  const allApps = [...runningApps];
-  dock.forEach(d => {
-    if (!allApps.find(a => a.name === d.name)) allApps.push(d);
+  // Merge installed + running, deduplicate by name
+  const runningNames = new Set(runningApps.map(a => a.appName || a.name));
+  const merged = [...allInstalledApps];
+  runningApps.forEach(a => {
+    if (!a.chromeWindowIndex && !merged.find(m => m.name === (a.appName || a.name))) {
+      merged.push({ name: a.appName || a.name, appPath: a.appPath, appName: a.appName || a.name });
+    }
   });
 
-  const filtered = allApps.filter(a =>
-    !a.chromeWindowIndex &&   // skip per-window chrome entries
-    (!q || a.name.toLowerCase().includes(q))
-  );
+  const filtered = merged.filter(a => !q || a.name.toLowerCase().includes(q));
 
   if (!filtered.length) {
     list.innerHTML = `<div style="text-align:center;color:var(--text3);padding:40px 0;font-size:14px">No apps found</div>`;
     return;
   }
 
+  const frag = document.createDocumentFragment();
   filtered.forEach(app => {
     const alreadyPinned = !!dock.find(d => d.name === app.name);
+    const isRunning     = runningNames.has(app.name);
+
     const item = document.createElement('div');
     item.className = 'picker-item' + (alreadyPinned ? ' already-pinned' : '');
 
@@ -1021,7 +1039,7 @@ function buildPickerList(query) {
     iconWrap.className = 'picker-item-icon';
     const img = document.createElement('img');
     img.alt = app.name;
-    img.src = `/api/icon/${encodeURIComponent(app.iconName || app.name)}`;
+    img.src = `/api/icon/${encodeURIComponent(app.name)}`;
     img.onerror = () => {
       img.remove();
       const init = document.createElement('span');
@@ -1031,33 +1049,56 @@ function buildPickerList(query) {
     };
     iconWrap.appendChild(img);
 
-    const name = document.createElement('div');
-    name.className = 'picker-item-name';
-    name.textContent = app.name + (alreadyPinned ? ' ✓' : '');
+    const nameWrap = document.createElement('div');
+    nameWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px';
+    const nameLine = document.createElement('div');
+    nameLine.className = 'picker-item-name';
+    nameLine.textContent = app.name;
+    nameWrap.appendChild(nameLine);
+    if (isRunning) {
+      const badge = document.createElement('div');
+      badge.style.cssText = 'font-size:11px;color:var(--green);font-weight:500';
+      badge.textContent = 'Running';
+      nameWrap.appendChild(badge);
+    }
+    if (alreadyPinned) {
+      const badge = document.createElement('div');
+      badge.style.cssText = 'font-size:11px;color:var(--text3)';
+      badge.textContent = 'Already in dock';
+      nameWrap.appendChild(badge);
+    }
 
     item.appendChild(iconWrap);
-    item.appendChild(name);
+    item.appendChild(nameWrap);
 
-    item.addEventListener('click', () => {
-      if (alreadyPinned) return;
-      dock.push({
-        name:    app.name,
-        appName: app.appName || app.name,
-        appPath: app.appPath || '',
-        iconName: app.iconName || app.name,
+    if (!alreadyPinned) {
+      item.addEventListener('click', () => {
+        dock.push({ name: app.name, appName: app.name, appPath: app.appPath || '', iconName: app.name });
+        saveDock();
+        renderDock();
+        closePicker();
+        vibrate(40);
       });
-      saveDock();
-      renderDock();
-      closePicker();
-      vibrate(40);
-    });
+    }
 
-    list.appendChild(item);
+    frag.appendChild(item);
   });
+  list.appendChild(frag);
 }
 
 $('picker-backdrop').addEventListener('click', closePicker);
 $('picker-search').addEventListener('input', e => buildPickerList(e.target.value));
+
+// ── Push panel above keyboard using visualViewport API ─────────────────────
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    const sheet = $('picker-sheet');
+    if (!sheet.classList.contains('show')) return;
+    const keyboardH = window.innerHeight - window.visualViewport.height;
+    $('picker-panel').style.transform = keyboardH > 50
+      ? `translateY(-${keyboardH}px)` : '';
+  });
+}
 
 // Initial render
 renderDock();
