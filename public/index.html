@@ -546,18 +546,18 @@
     </button>
   </div>
 
+  <!-- Open Apps (inline) -->
+  <div id="apps-header">Open Apps</div>
+  <div id="apps-loading">Loading…</div>
+  <div id="apps-empty">No apps open</div>
+  <div id="apps-grid"></div>
+
   <!-- Pinned Dock -->
   <div id="dock-header">
     <span>My Dock</span>
     <button id="dock-edit-btn">Edit</button>
   </div>
   <div id="dock-grid"></div>
-
-  <!-- Open Apps (inline) -->
-  <div id="apps-header">Open Apps</div>
-  <div id="apps-loading">Loading…</div>
-  <div id="apps-empty">No apps open</div>
-  <div id="apps-grid"></div>
 
 </div><!-- /pg-controls -->
 
@@ -688,10 +688,14 @@ function applyState(s) {
       $npArtist.style.display = 'block';
       $npTitle.textContent    = np.title;
       $npArtist.textContent   = np.artist || '';
+      // Something is playing → show pause icon
+      $('play-ico').querySelector('use').setAttribute('href', '#i-pause');
     } else {
       $npIdle.style.display   = 'block';
       $npTitle.style.display  = 'none';
       $npArtist.style.display = 'none';
+      // Nothing playing → show play icon
+      $('play-ico').querySelector('use').setAttribute('href', '#i-play');
     }
   }
 }
