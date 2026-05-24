@@ -787,7 +787,14 @@ paintSlider($volSlider, 50);
 document.body.addEventListener('click', e => {
   const btn = e.target.closest('[data-action]');
   if (btn && !btn.closest('#vol-slider') && !btn.closest('#bright-slider')) {
-    send(btn.dataset.action);
+    const action = btn.dataset.action;
+    // Optimistically flip play/pause icon on tap — server will confirm on next poll
+    if (action === 'playPause') {
+      const use = $('play-ico').querySelector('use');
+      const isPlay = use.getAttribute('href') === '#i-play';
+      use.setAttribute('href', isPlay ? '#i-pause' : '#i-play');
+    }
+    send(action);
   }
 });
 
