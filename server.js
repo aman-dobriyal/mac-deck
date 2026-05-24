@@ -1,5 +1,10 @@
 'use strict';
 
+// Never let a single unhandled rejection crash the whole server
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection (non-fatal):', err?.message || err);
+});
+
 const http      = require('http');
 const WebSocket = require('ws');
 const { exec }  = require('child_process');
@@ -252,32 +257,36 @@ async function handleAction(action, payload = {}) {
 
     case 'switchApp': {
       if (payload.chromeWindowIndex) {
-        // Focus a specific Chrome window by index
         run(`osascript -e '
           tell application "Google Chrome"
             set index of window ${payload.chromeWindowIndex} to 1
             activate
           end tell
-        '`);
+        '`).catch(() => {});
       } else {
         const target = payload.appPath || payload.appName || payload.name;
-        run(`osascript -e 'tell application "${target}" to activate'`);
+        run(`osascript -e 'tell application "${target}" to activate'`).catch(() => {});
       }
       break;
     }
 
     case 'launchApp': {
-      // Opens app even if not currently running — used by the pinned dock
       const target = payload.appPath || payload.appName || payload.name;
-      run(`open -a "${target.replace(/"/g, '\\"')}" 2>/dev/null`);
+      run(`open -a "${target.replace(/"/g, '\\"')}" 2>/dev/null`).catch(() => {});
       break;
     }
 
-    case 'wakeDisplay':    run(`caffeinate -u -t 1`); break;
-    case 'lock':           run(`/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>/dev/null || pmset displaysleepnow`); break;
-    case 'sleep':          run(`osascript -e 'tell application "System Events" to sleep'`); break;
-    case 'missionControl': run(`osascript -e 'tell application "Mission Control" to launch'`); break;
-    case 'screenshot':     run(`mkdir -p ~/Pictures/Screenshots && screencapture ~/Pictures/Screenshots/screenshot-$(date +%Y%m%d-%H%M%S).png`); break;
+    case 'wakeDisplay':    run(`caffeinate -u -t 1`).catch(() => {}); break;
+    case 'lock':           run(`/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>/dev/null || pmset displaysleepnow`).catch(() => {}); break;
+    case 'sleep':          run(`osascript -e 'tell application "System Events" to sleep'`).catch(() => {}); break;
+    case 'missionControl': run(`osascript -e 'tell application "Mission Control" to launch'`).catch(() => {}); break;
+    case 'screenshot': {
+      const file = `${os.homedir()}/Pictures/Screenshots/screenshot-${Date.now()}.png`;
+      run(`mkdir -p "${os.homedir()}/Pictures/Screenshots"`)
+        .then(() => run(`screencapture -x "${file}"`))
+        .catch(() => {});
+      break;
+    }
   }
   return null;
 }
