@@ -688,13 +688,13 @@ function applyState(s) {
       $npArtist.style.display = 'block';
       $npTitle.textContent    = np.title;
       $npArtist.textContent   = np.artist || '';
-      // Something is playing → show pause icon
-      $('play-ico').querySelector('use').setAttribute('href', '#i-pause');
+      // isPlaying=true → currently playing → show ⏸  (tap to pause)
+      // isPlaying=false → paused → show ▶  (tap to resume)
+      $('play-ico').querySelector('use').setAttribute('href', np.isPlaying ? '#i-pause' : '#i-play');
     } else {
       $npIdle.style.display   = 'block';
       $npTitle.style.display  = 'none';
       $npArtist.style.display = 'none';
-      // Nothing playing → show play icon
       $('play-ico').querySelector('use').setAttribute('href', '#i-play');
     }
   }

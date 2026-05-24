@@ -202,8 +202,15 @@ async function getNowPlaying() {
     try {
       const title = await run(`${bin} get title 2>/dev/null`);
       if (title && title !== 'null') {
-        const artist = await run(`${bin} get artist 2>/dev/null`).catch(() => '');
-        return { title, artist: artist !== 'null' ? artist : '' };
+        const [artist, rate] = await Promise.all([
+          run(`${bin} get artist 2>/dev/null`).catch(() => ''),
+          run(`${bin} get playbackRate 2>/dev/null`).catch(() => '1'),
+        ]);
+        return {
+          title,
+          artist:    artist !== 'null' ? artist : '',
+          isPlaying: parseFloat(rate) > 0,
+        };
       }
     } catch {}
   }
@@ -215,7 +222,7 @@ async function getNowPlaying() {
       );
       if (info?.includes('|||')) {
         const [t, a] = info.split('|||');
-        return { title: t.trim(), artist: a.trim() };
+        return { title: t.trim(), artist: a.trim(), isPlaying: true };
       }
     } catch {}
   }
