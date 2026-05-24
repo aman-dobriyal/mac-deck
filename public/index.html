@@ -608,7 +608,6 @@ let knownVersion = null;
 let ws = null, reconnectDelay = 1000;
 let volume = 50, muted = false, brightness = null;
 let sliderActive = false;
-let playPauseTappedAt = 0; // timestamp — ignore server icon updates briefly after tap
 let runningApps = [];
 let wolMac = localStorage.getItem('mac-deck-mac') || '10:b5:88:64:cf:e3';
 
@@ -692,10 +691,7 @@ function applyState(s) {
       $npArtist.style.display = 'block';
       $npTitle.textContent    = np.title;
       $npArtist.textContent   = np.artist || '';
-      // Only update icon from server if user hasn't tapped in the last 2.5s
-      if (Date.now() - playPauseTappedAt > 2500) {
-        $('play-ico').querySelector('use').setAttribute('href', np.isPlaying ? '#i-pause' : '#i-play');
-      }
+      $('play-ico').querySelector('use').setAttribute('href', np.isPlaying ? '#i-pause' : '#i-play');
     } else {
       $npIdle.style.display   = 'block';
       $npTitle.style.display  = 'none';
@@ -798,7 +794,6 @@ document.body.addEventListener('click', e => {
       const use = $('play-ico').querySelector('use');
       const isPlay = use.getAttribute('href') === '#i-play';
       use.setAttribute('href', isPlay ? '#i-pause' : '#i-play');
-      playPauseTappedAt = Date.now(); // lock out server updates for 2.5s
     }
     send(action);
   }

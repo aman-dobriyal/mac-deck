@@ -250,10 +250,16 @@ async function handleAction(action, payload = {}) {
       await run(`osascript -e "set s to get volume settings\nif output muted of s then\nset volume without output muted\nelse\nset volume with output muted\nend if"`);
       return getVolumeState();
 
-    // Media — nowplaying-cli preferred, JXA fallback
-    case 'playPause': await mediaControl('togglePlayPause', 16); break;
-    case 'nextTrack': await mediaControl('next',            17); break;
-    case 'prevTrack': await mediaControl('previous',        18); break;
+    // Media — fire command, wait for state to settle, push real state back via WS
+    case 'playPause':
+    case 'nextTrack':
+    case 'prevTrack': {
+      const cmds = { playPause: ['togglePlayPause', 16], nextTrack: ['next', 17], prevTrack: ['previous', 18] };
+      const [npCmd, jxaCode] = cmds[action];
+      await mediaControl(npCmd, jxaCode);
+      await new Promise(r => setTimeout(r, 700)); // let playback state settle
+      return { nowPlaying: await getNowPlaying() };
+    }
 
     case 'switchApp': {
       if (payload.chromeWindowIndex) {
