@@ -277,7 +277,7 @@ async function handleAction(action, payload = {}) {
     case 'lock':           run(`/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>/dev/null || pmset displaysleepnow`); break;
     case 'sleep':          run(`osascript -e 'tell application "System Events" to sleep'`); break;
     case 'missionControl': run(`osascript -e 'tell application "Mission Control" to launch'`); break;
-    case 'screenshot':     run(`screencapture -i ~/Desktop/screenshot-$(date +%Y%m%d-%H%M%S).png`); break;
+    case 'screenshot':     run(`screencapture ~/Desktop/screenshot-$(date +%Y%m%d-%H%M%S).png`); break;
   }
   return null;
 }
