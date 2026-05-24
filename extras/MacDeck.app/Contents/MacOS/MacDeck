@@ -1,0 +1,18 @@
+#!/bin/bash
+# Mac Deck server launcher
+# Runs as an LSUIElement app (no Dock/menu bar icon) so it stays in background.
+# macOS attributes Accessibility & Automation permission prompts to "Mac Deck".
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+SERVER="/Users/amandobriyal/Documents/GitHub/mac-deck/server.js"
+NODE="/opt/homebrew/bin/node"
+LOG="/tmp/macdeck.log"
+ERR="/tmp/macdeck.err"
+
+# If a previous instance is already running, exit quietly (launchd handles restarts)
+if lsof -ti :3333 >/dev/null 2>&1; then
+  exit 0
+fi
+
+exec "$NODE" "$SERVER" >>"$LOG" 2>>"$ERR"

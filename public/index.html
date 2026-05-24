@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mac Deck">
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="/manifest.json">
+  <title>Mac Deck</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #000;
+      --card:      #1c1c1e;
+      --card2:     #2c2c2e;
+      --fill:      #3a3a3c;
+      --border:    rgba(255,255,255,0.08);
+      --text:      #fff;
+      --text2:     rgba(255,255,255,0.5);
+      --text3:     rgba(255,255,255,0.28);
+      --accent:    #0a84ff;
+      --green:     #30d158;
+      --red:       #ff453a;
+      --tab-h:     0px;
+      --safe-top:  env(safe-area-inset-top, 0px);
+      --safe-bot:  env(safe-area-inset-bottom, 0px);
+      --r:         16px;          /* card radius */
+    }
+
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+    body { display: flex; flex-direction: column; padding-top: var(--safe-top); }
+    ::-webkit-scrollbar { display: none; }
+
+    /* ── SVG icon helper ──────────────────────────────────────────────────── */
+    .ico {
+      display: block; flex-shrink: 0;
+      fill: none; stroke: currentColor;
+      stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .ico-fill { fill: currentColor; stroke: none; }
+
+    /* ── Status bar ───────────────────────────────────────────────────────── */
+    #status {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 20px 4px; flex-shrink: 0;
+    }
+    #conn-badge {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 500; color: var(--text2);
+      letter-spacing: 0.01em;
+    }
+    #conn-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--fill); transition: background 0.4s, box-shadow 0.4s;
+    }
+    #conn-dot.live  { background: var(--green); box-shadow: 0 0 7px var(--green); }
+    #conn-dot.error { background: var(--red); }
+    #fs-btn {
+      background: none; border: none; color: var(--text3);
+      cursor: pointer; padding: 4px; border-radius: 8px; display: flex;
+      transition: color 0.2s;
+    }
+    #fs-btn:active { color: var(--accent); }
+
+    /* ── Pages ────────────────────────────────────────────────────────────── */
+    .page {
+      flex: 1; overflow-y: auto;
+      padding: 8px 16px calc(var(--safe-bot) + 24px);
+    }
+
+    /* ── Card ─────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border-radius: var(--r);
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+
+    /* ── Now Playing ──────────────────────────────────────────────────────── */
+    #now-playing {
+      padding: 16px 18px 18px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    #np-meta { display: flex; align-items: center; gap: 12px; }
+    #np-icon-wrap {
+      width: 42px; height: 42px; border-radius: 10px;
+      background: var(--card2);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text3); flex-shrink: 0;
+    }
+    #np-text { flex: 1; min-width: 0; }
+    #np-title  { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #np-artist { font-size: 13px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #np-idle   { font-size: 15px; color: var(--text2); }
+
+    /* Media transport */
+    #media-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 8px;
+    }
+    .transport-btn {
+      background: none; border: none; color: var(--text);
+      cursor: pointer; padding: 8px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity 0.12s, transform 0.1s;
+    }
+    .transport-btn:active { opacity: 0.5; transform: scale(0.88); }
+    #play-pause-btn {
+      background: var(--text); color: var(--bg);
+      width: 64px; height: 64px; border-radius: 50%;
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity 0.12s, transform 0.1s;
+      flex-shrink: 0;
+    }
+    #play-pause-btn:active { opacity: 0.8; transform: scale(0.91); }
+
+    /* ── Slider rows (volume, brightness) ─────────────────────────────────── */
+    .slider-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 18px;
+    }
+    .slider-icon { color: var(--text2); display: flex; align-items: center; flex-shrink: 0; }
+    .slider-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
+    .step-btn {
+      background: var(--card2); border: none; color: var(--text);
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: opacity 0.12s, transform 0.1s;
+    }
+    .step-btn:active { opacity: 0.6; transform: scale(0.88); }
+
+    input[type=range] {
+      -webkit-appearance: none; appearance: none; flex: 1;
+      height: 4px; border-radius: 2px; outline: none; cursor: pointer;
+      background: var(--fill);
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+    }
+    .slider-val { font-size: 13px; font-weight: 500; color: var(--text2); min-width: 34px; text-align: right; }
+
+    /* Divider between rows within a card */
+    .card-divider { height: 1px; background: var(--border); margin: 0 18px; }
+
+    /* ── Screen dimmer overlay ────────────────────────────────────────────── */
+    #dim-overlay {
+      position: fixed; inset: 0; z-index: 999;
+      background: #000;
+      opacity: 0;
+      pointer-events: none; /* taps pass straight through */
+      transition: opacity 0.2s;
+    }
+
+    /* ── System action grid ────────────────────────────────────────────────── */
+    #sys-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 10px; margin-bottom: 10px;
+    }
+    .sys-btn {
+      background: var(--card); border: none; color: var(--text);
+      border-radius: var(--r); padding: 18px 8px 14px;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      cursor: pointer;
+      transition: opacity 0.12s, transform 0.1s;
+      user-select: none;
+    }
+    .sys-btn:active { opacity: 0.6; transform: scale(0.91); }
+    .sys-btn-label { font-size: 11px; color: var(--text2); font-weight: 500; letter-spacing: 0.01em; }
+    .sys-btn.destructive { color: var(--red); }
+    .sys-btn.destructive .sys-btn-label { color: var(--red); opacity: 0.7; }
+
+    /* ── Running Apps section ────────────────────────────────────────────── */
+    #apps-header {
+      font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; color: var(--text2);
+      padding: 6px 4px 10px;
+    }
+    #apps-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+    .app-cell {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 8px;
+      cursor: pointer; user-select: none;
+      transition: opacity 0.12s, transform 0.1s;
+    }
+    .app-cell:active { opacity: 0.65; transform: scale(0.91); }
+    .app-cell.switching .app-cell-icon { outline: 2.5px solid var(--accent); }
+
+    .app-cell-icon {
+      width: 72px; height: 72px; border-radius: 18px;
+      overflow: hidden; background: var(--card2);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .app-cell-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .app-cell-icon .app-initial {
+      font-size: 28px; font-weight: 600; color: var(--text2);
+    }
+    .app-cell-name {
+      font-size: 11px; color: var(--text2); text-align: center;
+      line-height: 1.3; max-width: 80px;
+      overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+
+    #apps-empty  { text-align: center; color: var(--text3); font-size: 14px; padding: 60px 0; display: none; }
+    #apps-loading { text-align: center; color: var(--text3); font-size: 14px; padding: 60px 0; }
+
+
+    /* ── Install banner ───────────────────────────────────────────────────── */
+    #install-banner {
+      background: var(--card); border-radius: var(--r);
+      padding: 14px 16px; margin-bottom: 10px;
+      display: none; align-items: center; gap: 12px;
+    }
+    #install-banner.show { display: flex; }
+    #install-banner-text { flex: 1; font-size: 14px; color: var(--text2); }
+    #install-banner-text strong { color: var(--text); font-weight: 600; }
+    #install-btn {
+      background: var(--accent); border: none; color: #fff;
+      font-size: 13px; font-weight: 600; padding: 8px 14px;
+      border-radius: 10px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    #install-dismiss {
+      background: none; border: none; color: var(--text3);
+      cursor: pointer; display: flex; padding: 2px; flex-shrink: 0;
+    }
+
+    /* ── WoL bottom sheet ─────────────────────────────────────────────────── */
+    #wol-sheet {
+      display: none; position: fixed; inset: 0; z-index: 100;
+    }
+    #wol-sheet.show { display: flex; flex-direction: column; justify-content: flex-end; }
+    #wol-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(6px);
+    }
+    #wol-panel {
+      position: relative; background: #1c1c1e;
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px calc(20px + var(--safe-bot));
+    }
+    .wol-handle {
+      width: 36px; height: 4px; background: var(--fill);
+      border-radius: 2px; margin: 0 auto 20px;
+    }
+    #wol-panel h3 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+    #wol-panel p  { font-size: 14px; color: var(--text2); line-height: 1.5; margin-bottom: 18px; }
+    #wol-cmd {
+      background: #000; border-radius: 10px;
+      padding: 12px 14px; font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px; color: #5ac8fa; margin-bottom: 16px;
+      word-break: break-all; letter-spacing: 0.02em;
+    }
+    .wol-actions { display: flex; gap: 10px; }
+    .wol-action {
+      flex: 1; border: none; border-radius: 12px; font-size: 14px;
+      font-weight: 600; padding: 14px 8px; cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .wol-action:active { opacity: 0.75; }
+    .wol-action.primary { background: var(--accent); color: #fff; }
+    .wol-action.secondary { background: var(--card2); color: var(--text); }
+    #wol-copied {
+      text-align: center; font-size: 12px; color: var(--green);
+      margin-top: 12px; opacity: 0; transition: opacity 0.3s;
+    }
+    #wol-copied.show { opacity: 1; }
+
+    /* ── Toast ────────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: calc(var(--safe-bot) + 20px);
+      left: 50%; transform: translateX(-50%);
+      background: rgba(44,44,46,0.96); color: var(--text);
+      font-size: 13px; font-weight: 500;
+      padding: 10px 18px; border-radius: 20px;
+      white-space: nowrap; opacity: 0; pointer-events: none;
+      transition: opacity 0.2s; z-index: 200;
+      backdrop-filter: blur(12px);
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- ── SVG icon defs (hidden, referenced via <use>) ─────────────────────────── -->
+<svg style="display:none" aria-hidden="true">
+  <defs>
+    <!-- Media -->
+    <symbol id="i-skip-back"    viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="4" x2="5" y2="20"/></symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="4" x2="19" y2="20"/></symbol>
+    <symbol id="i-play"         viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+    <symbol id="i-pause"        viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-music"        viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+    <!-- Volume -->
+    <symbol id="i-vol-high"     viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
+    <symbol id="i-vol-off"      viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></symbol>
+    <symbol id="i-vol-low"      viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></symbol>
+    <!-- Brightness -->
+    <symbol id="i-sun"          viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"/></symbol>
+    <!-- System -->
+    <symbol id="i-monitor"      viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></symbol>
+    <symbol id="i-lock"         viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-layout"       viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-camera"       viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-moon"         viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+    <symbol id="i-zap"          viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <!-- UI controls -->
+    <symbol id="i-plus"         viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-minus"        viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-x"            viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="i-maximize"     viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-minimize"     viewBox="0 0 24 24"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></symbol>
+    <symbol id="i-download"     viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <!-- Tab icons -->
+    <symbol id="i-sliders"      viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-grid"         viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+  </defs>
+</svg>
+
+<!-- ── Status bar ─────────────────────────────────────────────────────────────── -->
+<div id="status">
+  <div id="conn-badge">
+    <span id="conn-dot"></span>
+    <span id="conn-label">Connecting</span>
+  </div>
+  <button id="fs-btn" aria-label="Fullscreen">
+    <svg class="ico" width="20" height="20"><use href="#i-maximize"/></svg>
+  </button>
+</div>
+
+<!-- ══════════════════════ CONTROLS PAGE ══════════════════════ -->
+<div class="page active" id="pg-controls">
+
+  <!-- PWA install -->
+  <div id="install-banner">
+    <div id="install-banner-text"><strong>Add to Home Screen</strong> for fullscreen</div>
+    <button id="install-btn">Install</button>
+    <button id="install-dismiss" aria-label="Dismiss">
+      <svg class="ico" width="18" height="18"><use href="#i-x"/></svg>
+    </button>
+  </div>
+
+  <!-- Now Playing + Transport -->
+  <div class="card" id="now-playing">
+    <div id="np-meta">
+      <div id="np-icon-wrap">
+        <svg class="ico" width="22" height="22"><use href="#i-music"/></svg>
+      </div>
+      <div id="np-text">
+        <div id="np-idle">Nothing Playing</div>
+        <div id="np-title"  style="display:none"></div>
+        <div id="np-artist" style="display:none"></div>
+      </div>
+    </div>
+    <div id="media-row">
+      <button class="transport-btn" data-action="prevTrack" aria-label="Previous">
+        <svg class="ico" width="28" height="28"><use href="#i-skip-back"/></svg>
+      </button>
+      <button id="play-pause-btn" data-action="playPause" aria-label="Play / Pause">
+        <svg class="ico" id="play-ico" width="26" height="26"><use href="#i-play"/></svg>
+      </button>
+      <button class="transport-btn" data-action="nextTrack" aria-label="Next">
+        <svg class="ico" width="28" height="28"><use href="#i-skip-forward"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Volume -->
+  <div class="card">
+    <div class="slider-row">
+      <button id="mute-btn" data-action="toggleMute" class="slider-icon" style="background:none;border:none;cursor:pointer;padding:0;" aria-label="Mute">
+        <svg class="ico" width="22" height="22" id="vol-ico"><use href="#i-vol-high"/></svg>
+      </button>
+      <div class="slider-wrap">
+        <button class="step-btn" data-action="volumeDown" aria-label="Volume down">
+          <svg class="ico" width="14" height="14"><use href="#i-minus"/></svg>
+        </button>
+        <input type="range" id="vol-slider" min="0" max="100" value="50" aria-label="Volume">
+        <button class="step-btn" data-action="volumeUp" aria-label="Volume up">
+          <svg class="ico" width="14" height="14"><use href="#i-plus"/></svg>
+        </button>
+      </div>
+      <span class="slider-val" id="vol-val">50%</span>
+    </div>
+  </div>
+
+
+  <!-- Screen dimmer -->
+  <div class="card">
+    <div class="slider-row">
+      <div class="slider-icon">
+        <svg class="ico" width="22" height="22"><use href="#i-moon"/></svg>
+      </div>
+      <div class="slider-wrap">
+        <button class="step-btn" id="dim-down" aria-label="Less dim">
+          <svg class="ico" width="14" height="14"><use href="#i-minus"/></svg>
+        </button>
+        <input type="range" id="dim-slider" min="0" max="90" value="0" aria-label="Screen dim">
+        <button class="step-btn" id="dim-up" aria-label="More dim">
+          <svg class="ico" width="14" height="14"><use href="#i-plus"/></svg>
+        </button>
+      </div>
+      <span class="slider-val" id="dim-val">Off</span>
+    </div>
+  </div>
+
+  <!-- System actions -->
+  <div id="sys-grid">
+    <button class="sys-btn" data-action="wakeDisplay">
+      <svg class="ico" width="26" height="26"><use href="#i-monitor"/></svg>
+      <span class="sys-btn-label">Wake</span>
+    </button>
+    <button class="sys-btn" data-action="lock">
+      <svg class="ico" width="26" height="26"><use href="#i-lock"/></svg>
+      <span class="sys-btn-label">Lock</span>
+    </button>
+    <button class="sys-btn" data-action="missionControl">
+      <svg class="ico" width="26" height="26"><use href="#i-layout"/></svg>
+      <span class="sys-btn-label">Mission</span>
+    </button>
+    <button class="sys-btn" data-action="screenshot">
+      <svg class="ico" width="26" height="26"><use href="#i-camera"/></svg>
+      <span class="sys-btn-label">Screenshot</span>
+    </button>
+    <button class="sys-btn" id="wol-btn">
+      <svg class="ico" width="26" height="26"><use href="#i-zap"/></svg>
+      <span class="sys-btn-label">Wake on LAN</span>
+    </button>
+    <button class="sys-btn destructive" data-action="sleep">
+      <svg class="ico" width="26" height="26"><use href="#i-moon"/></svg>
+      <span class="sys-btn-label">Sleep</span>
+    </button>
+  </div>
+
+  <!-- Open Apps (inline) -->
+  <div id="apps-header">Open Apps</div>
+  <div id="apps-loading">Loading…</div>
+  <div id="apps-empty">No apps open</div>
+  <div id="apps-grid"></div>
+
+</div><!-- /pg-controls -->
+
+<!-- ── Screen dim overlay (pointer-events:none so taps pass through) ─────── -->
+<div id="dim-overlay"></div>
+
+<!-- ── WoL sheet ──────────────────────────────────────────────────────────── -->
+<div id="wol-sheet">
+  <div id="wol-backdrop"></div>
+  <div id="wol-panel">
+    <div class="wol-handle"></div>
+    <h3>Wake on LAN</h3>
+    <p>Mac is asleep — run this in Termux to send the magic packet.</p>
+    <div id="wol-cmd"></div>
+    <div class="wol-actions">
+      <button class="wol-action primary" id="wol-copy-btn">Copy Command</button>
+      <button class="wol-action secondary" id="wol-termux-btn">Open Termux</button>
+    </div>
+    <div id="wol-copied">Copied to clipboard</div>
+  </div>
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<div id="toast" role="status"></div>
+
+<script>
+/* ── Constants ────────────────────────────────────────────────────────────── */
+const WS_URL = `ws://${location.hostname}:${location.port || 3333}`;
+let knownVersion = null;
+
+/* ── State ────────────────────────────────────────────────────────────────── */
+let ws = null, reconnectDelay = 1000;
+let volume = 50, muted = false, brightness = null;
+let sliderActive = false;
+let runningApps = [];
+let wolMac = localStorage.getItem('mac-deck-mac') || '10:b5:88:64:cf:e3';
+
+/* ── DOM ──────────────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const $connDot   = $('conn-dot');
+const $connLabel = $('conn-label');
+const $npIdle    = $('np-idle');
+const $npTitle   = $('np-title');
+const $npArtist  = $('np-artist');
+const $volSlider = $('vol-slider');
+const $volVal    = $('vol-val');
+const $appsGrid  = $('apps-grid');
+const $appsEmpty = $('apps-empty');
+const $appsLoad  = $('apps-loading');
+
+/* ── Screen wake lock (prevent phone screen from sleeping) ────────────────── */
+let wakeLock = null;
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') acquireWakeLock();
+});
+acquireWakeLock();
+
+/* ── WebSocket ────────────────────────────────────────────────────────────── */
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    $connDot.className = 'live';
+    $connLabel.textContent = 'Connected';
+    reconnectDelay = 1000;
+  };
+  ws.onclose = ws.onerror = () => {
+    $connDot.className = 'error';
+    $connLabel.textContent = 'Reconnecting…';
+    setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 1.5, 12000); connect(); }, reconnectDelay);
+  };
+  ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.type === 'version')     checkVersion(msg.version);
+    if (msg.type === 'state')       applyState(msg);
+    if (msg.type === 'runningApps') applyRunningApps(msg.apps);
+  };
+}
+
+function send(action, payload = {}) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action, payload }));
+  vibrate(22);
+}
+
+/* ── Auto-reload on server restart ───────────────────────────────────────── */
+function checkVersion(v) {
+  if (!knownVersion) { knownVersion = v; return; }
+  if (knownVersion !== v) { showToast('Updated — reloading…'); setTimeout(() => location.reload(), 1200); }
+}
+
+/* ── State ────────────────────────────────────────────────────────────────── */
+function applyState(s) {
+  if (s.volume !== undefined) {
+    volume = s.volume;
+    if (!sliderActive) { $volSlider.value = volume; paintSlider($volSlider, volume); }
+    $volVal.textContent = `${volume}%`;
+  }
+  if (s.muted !== undefined) {
+    muted = s.muted;
+    const use = $('vol-ico').querySelector('use');
+    use.setAttribute('href', muted ? '#i-vol-off' : volume < 40 ? '#i-vol-low' : '#i-vol-high');
+    $('mute-btn').style.color = muted ? 'var(--text3)' : '';
+  }
+  if (s.nowPlaying !== undefined) {
+    const np = s.nowPlaying;
+    if (np?.title) {
+      $npIdle.style.display   = 'none';
+      $npTitle.style.display  = 'block';
+      $npArtist.style.display = 'block';
+      $npTitle.textContent    = np.title;
+      $npArtist.textContent   = np.artist || '';
+    } else {
+      $npIdle.style.display   = 'block';
+      $npTitle.style.display  = 'none';
+      $npArtist.style.display = 'none';
+    }
+  }
+}
+
+/* ── Running apps ─────────────────────────────────────────────────────────── */
+function applyRunningApps(apps) {
+  runningApps = apps || [];
+  renderApps();
+}
+
+function renderApps() {
+  $appsLoad.style.display = 'none';
+  if (!runningApps.length) {
+    $appsEmpty.style.display = 'block';
+    $appsGrid.innerHTML = '';
+    return;
+  }
+  $appsEmpty.style.display = 'none';
+
+  const currentNames = [...$appsGrid.querySelectorAll('.app-cell')].map(c => c.dataset.name);
+  const newNames = runningApps.map(a => a.name);
+  if (JSON.stringify(currentNames) === JSON.stringify(newNames)) return;
+
+  $appsGrid.innerHTML = '';
+  runningApps.forEach(app => {
+    const { name, appPath, appName, iconName, chromeWindowIndex } = app;
+    const cell = document.createElement('div');
+    cell.className = 'app-cell';
+    cell.dataset.name = name;
+
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'app-cell-icon';
+
+    const img = document.createElement('img');
+    img.alt = name;
+    // Chrome windows carry iconName='Google Chrome' so they all share the same icon
+    img.src = `/api/icon/${encodeURIComponent(iconName || name)}`;
+    img.onerror = () => {
+      img.remove();
+      const init = document.createElement('span');
+      init.className = 'app-initial';
+      init.textContent = name[0];
+      iconWrap.appendChild(init);
+    };
+    iconWrap.appendChild(img);
+
+    const label = document.createElement('div');
+    label.className = 'app-cell-name';
+    label.textContent = name;
+
+    cell.appendChild(iconWrap);
+    cell.appendChild(label);
+    cell.addEventListener('click', () => {
+      cell.classList.add('switching');
+      // For Chrome windows pass the window index so the right window is raised
+      const payload = chromeWindowIndex
+        ? { appName: appName || name, appPath, chromeWindowIndex }
+        : { appName: appName || name, appPath };
+      send('switchApp', payload);
+      setTimeout(() => cell.classList.remove('switching'), 500);
+    });
+    $appsGrid.appendChild(cell);
+  });
+}
+
+
+fetch('/config.json').then(r => r.json()).then(cfg => {
+  if (cfg.macAddress) { wolMac = cfg.macAddress; localStorage.setItem('mac-deck-mac', cfg.macAddress); }
+  if (cfg.version && !knownVersion) knownVersion = cfg.version;
+}).catch(() => {});
+
+/* ── Sliders ──────────────────────────────────────────────────────────────── */
+function paintSlider(el, val, color = 'var(--accent)') {
+  const pct = `${val}%`;
+  el.style.background = `linear-gradient(to right, ${color} ${pct}, var(--fill) ${pct})`;
+}
+$volSlider.addEventListener('input', () => {
+  sliderActive = true;
+  paintSlider($volSlider, $volSlider.value);
+  $volVal.textContent = `${$volSlider.value}%`;
+});
+$volSlider.addEventListener('change', () => {
+  sliderActive = false;
+  send('setVolume', { level: +$volSlider.value });
+});
+paintSlider($volSlider, 50);
+
+/* ── Button actions ───────────────────────────────────────────────────────── */
+document.body.addEventListener('click', e => {
+  const btn = e.target.closest('[data-action]');
+  if (btn && !btn.closest('#vol-slider') && !btn.closest('#bright-slider')) {
+    send(btn.dataset.action);
+  }
+});
+
+
+/* ── Fullscreen ───────────────────────────────────────────────────────────── */
+const $fsBtn = $('fs-btn');
+function toggleFs() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+    $fsBtn.querySelector('use').setAttribute('href', '#i-minimize');
+  } else {
+    document.exitFullscreen().catch(() => {});
+    $fsBtn.querySelector('use').setAttribute('href', '#i-maximize');
+  }
+}
+$fsBtn.addEventListener('click', toggleFs);
+let autoFsDone = false;
+document.body.addEventListener('touchstart', () => {
+  if (!autoFsDone && !document.fullscreenElement &&
+      !matchMedia('(display-mode: fullscreen)').matches &&
+      !matchMedia('(display-mode: standalone)').matches) {
+    autoFsDone = true;
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+}, { once: true });
+
+/* ── PWA install ──────────────────────────────────────────────────────────── */
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  $('install-banner').classList.add('show');
+});
+$('install-btn').addEventListener('click', () => {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(() => { deferredPrompt = null; $('install-banner').classList.remove('show'); });
+  }
+});
+$('install-dismiss').addEventListener('click', () => $('install-banner').classList.remove('show'));
+
+/* ── WoL sheet ────────────────────────────────────────────────────────────── */
+$('wol-btn').addEventListener('click', () => {
+  $('wol-cmd').textContent = `wakeonlan ${wolMac}`;
+  $('wol-copied').classList.remove('show');
+  $('wol-sheet').classList.add('show');
+  vibrate(28);
+});
+$('wol-backdrop').addEventListener('click', () => $('wol-sheet').classList.remove('show'));
+$('wol-copy-btn').addEventListener('click', () => {
+  navigator.clipboard.writeText(`wakeonlan ${wolMac}`)
+    .then(() => { $('wol-copied').classList.add('show'); vibrate(40); })
+    .catch(() => showToast('Select the text and copy manually'));
+});
+$('wol-termux-btn').addEventListener('click', () => {
+  navigator.clipboard.writeText(`wakeonlan ${wolMac}`).catch(() => {});
+  window.location.href = 'termux://open';
+  setTimeout(() => showToast('Command copied — paste in Termux'), 300);
+  $('wol-sheet').classList.remove('show');
+});
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+const $toast = $('toast');
+let toastTimer;
+function showToast(msg) {
+  $toast.textContent = msg;
+  $toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $toast.classList.remove('show'), 2400);
+}
+
+/* ── Screen dimmer ────────────────────────────────────────────────────────── */
+const $dimOverlay = $('dim-overlay');
+const $dimSlider  = $('dim-slider');
+const $dimVal     = $('dim-val');
+
+const savedDim = parseInt(localStorage.getItem('mac-deck-dim') || '0', 10);
+setDim(savedDim);
+
+function setDim(val) {
+  val = Math.max(0, Math.min(90, val));
+  $dimSlider.value = val;
+  paintSlider($dimSlider, val / 90 * 100, 'rgba(255,255,255,0.3)');
+  $dimOverlay.style.opacity = (val / 100).toFixed(2);
+  $dimVal.textContent = val === 0 ? 'Off' : `${val}%`;
+  localStorage.setItem('mac-deck-dim', val);
+}
+
+$dimSlider.addEventListener('input',    () => setDim(+$dimSlider.value));
+$('dim-down').addEventListener('click', () => setDim(+$dimSlider.value - 10));
+$('dim-up').addEventListener('click',   () => setDim(+$dimSlider.value + 10));
+
+/* ── Haptic ───────────────────────────────────────────────────────────────── */
+function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
+
+/* ── Service Worker ───────────────────────────────────────────────────────── */
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+/* ── Boot ─────────────────────────────────────────────────────────────────── */
+connect();
+</script>
+</body>
+</html>
