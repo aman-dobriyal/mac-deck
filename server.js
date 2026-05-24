@@ -7,7 +7,7 @@ process.on('unhandledRejection', (err) => {
 
 const http      = require('http');
 const WebSocket = require('ws');
-const { exec }  = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs        = require('fs');
 const path      = require('path');
 const os        = require('os');
@@ -287,10 +287,14 @@ async function handleAction(action, payload = {}) {
     case 'sleep':          run(`osascript -e 'tell application "System Events" to sleep'`).catch(() => {}); break;
     case 'missionControl': run(`osascript -e 'tell application "Mission Control" to launch'`).catch(() => {}); break;
     case 'screenshot': {
-      const file = `${os.homedir()}/Pictures/Screenshots/screenshot-${Date.now()}.png`;
-      run(`mkdir -p "${os.homedir()}/Pictures/Screenshots"`)
-        .then(() => run(`screencapture -x "${file}"`))
-        .catch(() => {});
+      // osascript's do shell script keeps osascript as the responsible process,
+      // so Screen Recording permission on /usr/bin/osascript is enough.
+      const dir  = `${os.homedir()}/Pictures/Screenshots`;
+      const file = `${dir}/screenshot-${Date.now()}.png`;
+      fs.mkdirSync(dir, { recursive: true });
+      run(`osascript -e 'do shell script "screencapture -x \\"${file}\\""'`)
+        .then(() => console.log('Screenshot saved:', file))
+        .catch(e => console.error('Screenshot failed:', e.message));
       break;
     }
   }
