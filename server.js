@@ -16,12 +16,19 @@ const PORT           = 3333;
 const PUBLIC_DIR     = path.join(__dirname, 'public');
 const MAC_ADDRESS    = '10:b5:88:64:cf:e3';
 const SERVER_VERSION = Date.now().toString();
+const IS_MAC         = process.platform === 'darwin';
+const IS_WIN         = process.platform === 'win32';
 
 const HIDDEN_PROCS = new Set([
+  // macOS
   'loginwindow', 'Dock', 'SystemUIServer', 'WindowServer',
   'ControlStrip', 'Control Centre', 'Notification Centre',
   'Spotlight', 'TextInputMenuAgent', 'AirPlayUIAgent',
   'WiFiAgent', 'universalaccessd', 'talagent', 'app_mode_loader',
+  // Windows
+  'explorer', 'TextInputHost', 'StartMenuExperienceHost',
+  'SearchHost', 'SearchApp', 'ShellExperienceHost',
+  'LockApp', 'WinStore.App',
 ]);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,13 +40,20 @@ function run(cmd) {
   });
 }
 
-// ─── JXA media-key simulation ─────────────────────────────────────────────────
-// Sends the real system media key event — works with ANY app (Chrome, YouTube,
-// Spotify web, Twitch, etc.) without requiring any external tools.
-// NX key codes: 16 = Play/Pause, 17 = Next, 18 = Previous
-const JXA_MEDIA_SCRIPT = '/tmp/macdeck-mediakey.js';
+// Run a PowerShell script (Windows only)
+function runPs(script) {
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 8000 },
+      (err, stdout) => err ? reject(err) : resolve(stdout.trim())
+    );
+  });
+}
 
-fs.writeFileSync(JXA_MEDIA_SCRIPT, `
+// ─── JXA media-key simulation (macOS only) ────────────────────────────────────
+const JXA_MEDIA_SCRIPT = '/tmp/macdeck-mediakey.js';
+if (IS_MAC) {
+  fs.writeFileSync(JXA_MEDIA_SCRIPT, `
 function postMediaKey(code, down) {
   ObjC.import('Cocoa');
   var flags = down ? 0xa00 : 0xb00;
@@ -53,34 +67,48 @@ var key = parseInt($.NSProcessInfo.processInfo.environment.objectForKey('MEDIA_K
 postMediaKey(key, true);
 postMediaKey(key, false);
 `);
+}
 
 function mediaKey(code) {
   return run(`MEDIA_KEY=${code} osascript -l JavaScript "${JXA_MEDIA_SCRIPT}" 2>/dev/null`);
 }
 
-// nowplaying-cli is the preferred media controller — works with Chrome, Spotify web,
-// YouTube Music, Twitch, Apple Music, etc. JXA is a fallback.
-const NOWPLAYING_CLI = ['/opt/homebrew/bin/nowplaying-cli', '/usr/local/bin/nowplaying-cli']
-  .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || null;
+const NOWPLAYING_CLI = IS_MAC
+  ? ['/opt/homebrew/bin/nowplaying-cli', '/usr/local/bin/nowplaying-cli']
+      .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || null
+  : null;
 
 async function mediaControl(npCmd, jxaCode) {
+  if (IS_WIN) {
+    // Windows media keys via PowerShell keybd_event
+    // VK codes: 0xB3 = PlayPause, 0xB0 = Next, 0xB1 = Prev
+    const VK = { togglePlayPause: '0xB3', next: '0xB0', previous: '0xB1' };
+    const vk = VK[npCmd] || '0xB3';
+    await runPs(`
+      Add-Type -TypeDefinition @"
+      using System; using System.Runtime.InteropServices;
+      public class MK { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk,byte bScan,uint dwFlags,int dwExtraInfo); }
+"@
+      [MK]::keybd_event(${vk},0,0,0); Start-Sleep -Milliseconds 50; [MK]::keybd_event(${vk},0,2,0)
+    `).catch(() => {});
+    return;
+  }
   if (NOWPLAYING_CLI) {
     try { await run(`${NOWPLAYING_CLI} ${npCmd} 2>/dev/null`); return; } catch {}
   }
   mediaKey(jxaCode);
 }
 
-// ─── Chrome window helpers ────────────────────────────────────────────────────
+// ─── Chrome window helpers (macOS) ────────────────────────────────────────────
 function cleanChromeTitle(raw) {
   return raw
-    .replace(/^\(\d+\)\s+/, '')           // strip "(5) " notification prefix
-    .replace(/\s+-\s+Google Chrome$/, '') // strip " - Google Chrome" suffix
-    .replace(/\s+-\s+.*$/, '');           // strip any trailing " - Sitename"
+    .replace(/^\(\d+\)\s+/, '')
+    .replace(/\s+-\s+Google Chrome$/, '')
+    .replace(/\s+-\s+.*$/, '');
 }
 
 async function getChromeWindows() {
   try {
-    // Returns index~title| for each window
     const raw = await run(`osascript -e '
       tell application "Google Chrome"
         set out to ""
@@ -106,93 +134,168 @@ async function getChromeWindows() {
 // ─── Running apps ─────────────────────────────────────────────────────────────
 const appPathCache = {};
 
+async function getRunningAppsMac() {
+  const raw = await run(`osascript -e '
+    set out to ""
+    tell application "System Events"
+      set procs to every process whose visible is true and background only is false
+      repeat with p in procs
+        try
+          set n to name of p
+          try
+            set ap to POSIX path of (application file of p)
+          on error
+            set ap to ""
+          end try
+          set out to out & n & "|" & ap & "~"
+        end try
+      end repeat
+    end tell
+    return out
+  '`);
+
+  const results = [];
+  for (const entry of raw.split('~')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const bar = trimmed.indexOf('|');
+    const name    = trimmed.slice(0, bar).trim();
+    const appPath = trimmed.slice(bar + 1).trim();
+    if (!name || HIDDEN_PROCS.has(name)) continue;
+    if (appPath) appPathCache[name] = appPath;
+    results.push({ name, appPath });
+  }
+
+  // Expand Chrome → one entry per window
+  const chromeIdx = results.findIndex(a => a.name === 'Google Chrome');
+  if (chromeIdx !== -1) {
+    const chromeAppPath = results[chromeIdx].appPath;
+    const windows = await getChromeWindows();
+    if (windows.length > 1) {
+      const expanded = windows.map(w => ({
+        name:              w.title.length > 24 ? w.title.slice(0, 23) + '…' : w.title,
+        appPath:           chromeAppPath,
+        appName:           'Google Chrome',
+        chromeWindowIndex: w.index,
+        iconName:          'Google Chrome',
+      }));
+      results.splice(chromeIdx, 1, ...expanded);
+    }
+  }
+  return results;
+}
+
+async function getRunningAppsWin() {
+  const raw = await runPs(`
+    Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -ne '' } |
+      Select-Object -Property Name,MainWindowTitle,Path |
+      ForEach-Object { $_.Name + '|' + $_.MainWindowTitle + '|' + $_.Path + '~' }
+  `);
+  const results = [];
+  for (const entry of raw.split('~')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split('|');
+    const procName = parts[0]?.trim();
+    const winTitle = parts[1]?.trim();
+    const exePath  = parts[2]?.trim() || '';
+    if (!procName || HIDDEN_PROCS.has(procName)) continue;
+    // Use the window title as display name (friendlier), fallback to proc name
+    const name = winTitle || procName;
+    if (exePath) appPathCache[name] = exePath;
+    results.push({ name, appPath: exePath, appName: name });
+  }
+  return results;
+}
+
 async function getRunningApps() {
   try {
-    const raw = await run(`osascript -e '
-      set out to ""
-      tell application "System Events"
-        set procs to every process whose visible is true and background only is false
-        repeat with p in procs
-          try
-            set n to name of p
-            try
-              set ap to POSIX path of (application file of p)
-            on error
-              set ap to ""
-            end try
-            set out to out & n & "|" & ap & "~"
-          end try
-        end repeat
-      end tell
-      return out
-    '`);
-
-    const results = [];
-    for (const entry of raw.split('~')) {
-      const trimmed = entry.trim();
-      if (!trimmed) continue;
-      const bar = trimmed.indexOf('|');
-      const name    = trimmed.slice(0, bar).trim();
-      const appPath = trimmed.slice(bar + 1).trim();
-      if (!name || HIDDEN_PROCS.has(name)) continue;
-      if (appPath) appPathCache[name] = appPath;
-      results.push({ name, appPath });
-    }
-
-    // Expand Google Chrome → one entry per window (so each profile/tab is tappable)
-    const chromeIdx = results.findIndex(a => a.name === 'Google Chrome');
-    if (chromeIdx !== -1) {
-      const chromeAppPath = results[chromeIdx].appPath;
-      const windows = await getChromeWindows();
-      if (windows.length > 1) {
-        const expanded = windows.map(w => ({
-          name:              w.title.length > 24 ? w.title.slice(0, 23) + '…' : w.title,
-          appPath:           chromeAppPath,
-          appName:           'Google Chrome',
-          chromeWindowIndex: w.index,
-          iconName:          'Google Chrome', // always use Chrome icon
-        }));
-        results.splice(chromeIdx, 1, ...expanded);
-      }
-      // Single Chrome window: just leave it as-is (no expansion needed)
-    }
-
-    return results;
+    return IS_WIN ? await getRunningAppsWin() : await getRunningAppsMac();
   } catch { return []; }
 }
 
 // ─── App icon extraction ──────────────────────────────────────────────────────
 const iconCache = new Map();
 
+async function getAppIconMac(appName) {
+  let appBase = appPathCache[appName];
+  if (!appBase) {
+    appBase = await run(
+      `osascript -e 'POSIX path of (path to application "${appName.replace(/"/g, '')}") 2>/dev/null' 2>/dev/null`
+    ).catch(() => '');
+  }
+  if (!appBase) return null;
+  const clean = appBase.replace(/\/$/, '');
+  const plist = `${clean}/Contents/Info.plist`;
+  let iconFile = await run(`defaults read "${plist}" CFBundleIconFile 2>/dev/null`).catch(() => '');
+  if (!iconFile) iconFile = await run(`defaults read "${plist}" CFBundleIconName 2>/dev/null`).catch(() => '');
+  if (!iconFile) return null;
+  if (!iconFile.endsWith('.icns')) iconFile += '.icns';
+  const icnsPath = `${clean}/Contents/Resources/${iconFile}`;
+  const tmpPng   = `/tmp/macdeck-icon-${appName.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
+  await run(`sips -s format png "${icnsPath}" --out "${tmpPng}" --resampleHeightWidth 96 96 2>/dev/null`);
+  return fs.readFileSync(tmpPng);
+}
+
+async function getAppIconWin(appName) {
+  const exePath = appPathCache[appName];
+  if (!exePath) return null;
+  const safePath  = exePath.replace(/'/g, "''");
+  const tmpPng    = require('os').tmpdir() + `\\macdeck-icon-${appName.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
+  await runPs(`
+    Add-Type -AssemblyName System.Drawing
+    $ico = [System.Drawing.Icon]::ExtractAssociatedIcon('${safePath}')
+    if ($ico) {
+      $bmp = $ico.ToBitmap()
+      $sized = New-Object System.Drawing.Bitmap($bmp, 96, 96)
+      $sized.Save('${tmpPng}', [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+  `);
+  return fs.readFileSync(tmpPng);
+}
+
 async function getAppIcon(appName) {
   if (iconCache.has(appName)) return iconCache.get(appName);
   iconCache.set(appName, null);
   try {
-    let appBase = appPathCache[appName];
-    if (!appBase) {
-      appBase = await run(
-        `osascript -e 'POSIX path of (path to application "${appName.replace(/"/g, '')}") 2>/dev/null' 2>/dev/null`
-      ).catch(() => '');
-    }
-    if (!appBase) return null;
-    const clean = appBase.replace(/\/$/, '');
-    const plist = `${clean}/Contents/Info.plist`;
-    let iconFile = await run(`defaults read "${plist}" CFBundleIconFile 2>/dev/null`).catch(() => '');
-    if (!iconFile) iconFile = await run(`defaults read "${plist}" CFBundleIconName 2>/dev/null`).catch(() => '');
-    if (!iconFile) return null;
-    if (!iconFile.endsWith('.icns')) iconFile += '.icns';
-    const icnsPath = `${clean}/Contents/Resources/${iconFile}`;
-    const tmpPng   = `/tmp/macdeck-icon-${appName.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
-    await run(`sips -s format png "${icnsPath}" --out "${tmpPng}" --resampleHeightWidth 96 96 2>/dev/null`);
-    const buf = fs.readFileSync(tmpPng);
-    iconCache.set(appName, buf);
-    return buf;
+    const buf = IS_WIN ? await getAppIconWin(appName) : await getAppIconMac(appName);
+    if (buf) iconCache.set(appName, buf);
+    return buf || null;
   } catch { return null; }
 }
 
 // ─── Volume / now playing ─────────────────────────────────────────────────────
 async function getVolumeState() {
   try {
+    if (IS_WIN) {
+      const raw = await runPs(`
+        Add-Type -TypeDefinition @"
+        using System; using System.Runtime.InteropServices;
+        [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioEndpointVolume { void _1(); void _2(); void _3(); void _4();
+          [PreserveSig] int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+          void _6();
+          [PreserveSig] int GetMasterVolumeLevelScalar(out float pfLevel);
+          void _8(); void _9(); void _10(); void _11(); void _12();
+          [PreserveSig] int GetMute(out bool pbMute);
+          [PreserveSig] int SetMute(bool bMute, Guid pguidEventContext); }
+        [Guid("D666063F-1587-4E43-81F1-B948E807363F")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice { void _1(); [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface); }
+        [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator { void _1(); [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint); }
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorClass {}
+        public class AudioHelper {
+          public static float GetVolume() { var e = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); Guid g=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A"); object o; d.Activate(ref g,23,IntPtr.Zero,out o); var v=(IAudioEndpointVolume)o; float f; v.GetMasterVolumeLevelScalar(out f); return f; }
+          public static bool GetMute() { var e = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); Guid g=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A"); object o; d.Activate(ref g,23,IntPtr.Zero,out o); var v=(IAudioEndpointVolume)o; bool b; v.GetMute(out b); return b; }
+          public static void SetVolume(float f) { var e = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); Guid g=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A"); object o; d.Activate(ref g,23,IntPtr.Zero,out o); var v=(IAudioEndpointVolume)o; v.SetMasterVolumeLevelScalar(f, Guid.Empty); }
+          public static void SetMute(bool m) { var e = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); Guid g=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A"); object o; d.Activate(ref g,23,IntPtr.Zero,out o); var v=(IAudioEndpointVolume)o; v.SetMute(m, Guid.Empty); }
+        }
+"@ -ReferencedAssemblies @('System.Runtime.InteropServices')
+        [AudioHelper]::GetVolume().ToString('F2') + '|' + [AudioHelper]::GetMute().ToString()
+      `);
+      const [volStr, muteStr] = raw.split('|');
+      return { volume: Math.round(parseFloat(volStr) * 100), muted: muteStr?.trim() === 'True' };
+    }
     const [vol, muted] = await Promise.all([
       run(`osascript -e "output volume of (get volume settings)"`),
       run(`osascript -e "output muted of (get volume settings)"`),
@@ -202,7 +305,32 @@ async function getVolumeState() {
 }
 
 async function getNowPlaying() {
-  // nowplaying-cli (if installed) covers Chrome media sessions, Spotify, etc.
+  if (IS_WIN) {
+    // Windows SMTC (System Media Transport Controls) via PowerShell
+    try {
+      const raw = await runPs(`
+        $mgr = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime]
+        $task = $mgr::RequestAsync()
+        $task.AsTask().Wait(2000) | Out-Null
+        $session = $task.GetResults().GetCurrentSession()
+        if ($session) {
+          $infoTask = $session.TryGetMediaPropertiesAsync()
+          $infoTask.AsTask().Wait(2000) | Out-Null
+          $info = $infoTask.GetResults()
+          $pbTask = $session.GetPlaybackInfo()
+          $playing = ($pbTask.PlaybackStatus -eq 4)  # 4 = Playing
+          Write-Output ($info.Title + '|||' + $info.Artist + '|||' + $playing)
+        }
+      `);
+      if (raw?.includes('|||')) {
+        const [title, artist, playingStr] = raw.split('|||');
+        if (title?.trim()) return { title: title.trim(), artist: artist?.trim() || '', isPlaying: playingStr?.trim() === 'True' };
+      }
+    } catch {}
+    return null;
+  }
+
+  // macOS: nowplaying-cli first, then fallback to desktop apps
   for (const bin of ['/opt/homebrew/bin/nowplaying-cli', '/usr/local/bin/nowplaying-cli']) {
     try {
       const title = await run(`${bin} get title 2>/dev/null`);
@@ -219,7 +347,6 @@ async function getNowPlaying() {
       }
     } catch {}
   }
-  // Fallback: desktop apps
   for (const app of ['Spotify', 'Music']) {
     try {
       const info = await run(
@@ -234,22 +361,60 @@ async function getNowPlaying() {
   return null;
 }
 
+// ─── Windows volume helpers ────────────────────────────────────────────────────
+const WIN_VOL_HELPER = IS_WIN ? `
+  Add-Type -TypeDefinition @"
+  using System; using System.Runtime.InteropServices;
+  [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAudioEndpointVolume { void _1(); void _2(); void _3(); void _4();
+    [PreserveSig] int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext); void _6();
+    [PreserveSig] int GetMasterVolumeLevelScalar(out float pfLevel);
+    void _8(); void _9(); void _10(); void _11(); void _12();
+    [PreserveSig] int GetMute(out bool pbMute);
+    [PreserveSig] int SetMute(bool bMute, Guid pguidEventContext); }
+  [Guid("D666063F-1587-4E43-81F1-B948E807363F")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice { void _1(); [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface); }
+  [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")] [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator { void _1(); [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint); }
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorClass {}
+  public class AudioHelper {
+    static IAudioEndpointVolume GetEPV() { var e=(IMMDeviceEnumerator)new MMDeviceEnumeratorClass(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); Guid g=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A"); object o; d.Activate(ref g,23,IntPtr.Zero,out o); return (IAudioEndpointVolume)o; }
+    public static float GetVolume() { float f; GetEPV().GetMasterVolumeLevelScalar(out f); return f; }
+    public static bool GetMute() { bool b; GetEPV().GetMute(out b); return b; }
+    public static void SetVolume(float f) { GetEPV().SetMasterVolumeLevelScalar(f, Guid.Empty); }
+    public static void SetMute(bool m) { GetEPV().SetMute(m, Guid.Empty); }
+  }
+"@ -ReferencedAssemblies @('System.Runtime.InteropServices')` : '';
+
 // ─── Action handler ───────────────────────────────────────────────────────────
 async function handleAction(action, payload = {}) {
-  switch (action) {
-    case 'volumeUp':
-      await run(`osascript -e "set volume output volume (((output volume of (get volume settings)) + 5) as integer)"`);
-      return getVolumeState();
-    case 'volumeDown':
-      await run(`osascript -e "set volume output volume (((output volume of (get volume settings)) - 5) as integer)"`);
-      return getVolumeState();
-    case 'setVolume':
-      await run(`osascript -e "set volume output volume ${parseInt(payload.level, 10)}"`);
-      return getVolumeState();
-    case 'toggleMute':
-      await run(`osascript -e "set s to get volume settings\nif output muted of s then\nset volume without output muted\nelse\nset volume with output muted\nend if"`);
-      return getVolumeState();
+  // ── Volume ──────────────────────────────────────────────────────────────────
+  if (action === 'volumeUp' || action === 'volumeDown' || action === 'setVolume' || action === 'toggleMute') {
+    if (IS_WIN) {
+      if (action === 'volumeUp') {
+        await runPs(`${WIN_VOL_HELPER}; $v=[AudioHelper]::GetVolume(); [AudioHelper]::SetVolume([Math]::Min(1.0f,$v+0.05f))`);
+      } else if (action === 'volumeDown') {
+        await runPs(`${WIN_VOL_HELPER}; $v=[AudioHelper]::GetVolume(); [AudioHelper]::SetVolume([Math]::Max(0.0f,$v-0.05f))`);
+      } else if (action === 'setVolume') {
+        const level = Math.max(0, Math.min(100, parseInt(payload.level, 10))) / 100;
+        await runPs(`${WIN_VOL_HELPER}; [AudioHelper]::SetVolume(${level}f)`);
+      } else if (action === 'toggleMute') {
+        await runPs(`${WIN_VOL_HELPER}; $m=[AudioHelper]::GetMute(); [AudioHelper]::SetMute(!$m)`);
+      }
+    } else {
+      if (action === 'volumeUp')
+        await run(`osascript -e "set volume output volume (((output volume of (get volume settings)) + 5) as integer)"`);
+      else if (action === 'volumeDown')
+        await run(`osascript -e "set volume output volume (((output volume of (get volume settings)) - 5) as integer)"`);
+      else if (action === 'setVolume')
+        await run(`osascript -e "set volume output volume ${parseInt(payload.level, 10)}"`);
+      else if (action === 'toggleMute')
+        await run(`osascript -e "set s to get volume settings\nif output muted of s then\nset volume without output muted\nelse\nset volume with output muted\nend if"`);
+    }
+    return getVolumeState();
+  }
 
+  switch (action) {
     // Media — fire command, wait for state to settle, push real state back via WS
     case 'playPause':
     case 'nextTrack':
@@ -257,12 +422,28 @@ async function handleAction(action, payload = {}) {
       const cmds = { playPause: ['togglePlayPause', 16], nextTrack: ['next', 17], prevTrack: ['previous', 18] };
       const [npCmd, jxaCode] = cmds[action];
       await mediaControl(npCmd, jxaCode);
-      await new Promise(r => setTimeout(r, 700)); // let playback state settle
+      await new Promise(r => setTimeout(r, 700));
       return { nowPlaying: await getNowPlaying() };
     }
 
     case 'switchApp': {
-      if (payload.chromeWindowIndex) {
+      if (IS_WIN) {
+        const exePath = payload.appPath || '';
+        if (exePath) {
+          // Bring window to foreground by exe path
+          runPs(`
+            Add-Type -TypeDefinition @"
+            using System; using System.Runtime.InteropServices;
+            public class WinHelper {
+              [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+              [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+            }
+"@
+            $proc = Get-Process | Where-Object { $_.Path -eq '${exePath.replace(/'/g, "''")}' -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($proc) { [WinHelper]::ShowWindow($proc.MainWindowHandle, 9); [WinHelper]::SetForegroundWindow($proc.MainWindowHandle) }
+          `).catch(() => {});
+        }
+      } else if (payload.chromeWindowIndex) {
         run(`osascript -e '
           tell application "Google Chrome"
             set index of window ${payload.chromeWindowIndex} to 1
@@ -277,24 +458,69 @@ async function handleAction(action, payload = {}) {
     }
 
     case 'launchApp': {
-      const target = payload.appPath || payload.appName || payload.name;
-      run(`open -a "${target.replace(/"/g, '\\"')}" 2>/dev/null`).catch(() => {});
+      if (IS_WIN) {
+        const exePath = payload.appPath || '';
+        if (exePath) run(`start "" "${exePath.replace(/"/g, '\\"')}"`).catch(() => {});
+      } else {
+        const target = payload.appPath || payload.appName || payload.name;
+        run(`open -a "${target.replace(/"/g, '\\"')}" 2>/dev/null`).catch(() => {});
+      }
       break;
     }
 
-    case 'wakeDisplay':    run(`caffeinate -u -t 1`).catch(() => {}); break;
-    case 'lock':           run(`/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>/dev/null || pmset displaysleepnow`).catch(() => {}); break;
-    case 'sleep':          run(`osascript -e 'tell application "System Events" to sleep'`).catch(() => {}); break;
-    case 'missionControl': run(`osascript -e 'tell application "Mission Control" to launch'`).catch(() => {}); break;
+    case 'wakeDisplay':
+      if (IS_WIN) runPs(`(Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int c,int e);' -Name U -Namespace W -PassThru)::mouse_event(1,0,0,0,0)`).catch(() => {});
+      else run(`caffeinate -u -t 1`).catch(() => {});
+      break;
+
+    case 'lock':
+      if (IS_WIN) run(`rundll32.exe user32.dll,LockWorkStation`).catch(() => {});
+      else run(`/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>/dev/null || pmset displaysleepnow`).catch(() => {});
+      break;
+
+    case 'sleep':
+      if (IS_WIN) run(`rundll32.exe powrprof.dll,SetSuspendState 0,1,0`).catch(() => {});
+      else run(`osascript -e 'tell application "System Events" to sleep'`).catch(() => {});
+      break;
+
+    case 'missionControl':
+      if (IS_WIN) {
+        // Win+Tab = Task View
+        runPs(`
+          Add-Type -TypeDefinition @"using System; using System.Runtime.InteropServices;
+          public class KH { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk,byte bScan,uint dwFlags,int dwExtraInfo); }"@
+          [KH]::keybd_event(0x5B,0,0,0); [KH]::keybd_event(0x09,0,0,0); Start-Sleep -Milliseconds 50;
+          [KH]::keybd_event(0x09,0,2,0); [KH]::keybd_event(0x5B,0,2,0)
+        `).catch(() => {});
+      } else {
+        run(`osascript -e 'tell application "Mission Control" to launch'`).catch(() => {});
+      }
+      break;
+
     case 'screenshot': {
-      // osascript's do shell script keeps osascript as the responsible process,
-      // so Screen Recording permission on /usr/bin/osascript is enough.
-      const dir  = `${os.homedir()}/Pictures/Screenshots`;
-      const file = `${dir}/screenshot-${Date.now()}.png`;
-      fs.mkdirSync(dir, { recursive: true });
-      run(`osascript -e 'do shell script "screencapture -x \\"${file}\\""'`)
-        .then(() => console.log('Screenshot saved:', file))
-        .catch(e => console.error('Screenshot failed:', e.message));
+      if (IS_WIN) {
+        const dir  = path.join(os.homedir(), 'Pictures', 'Screenshots');
+        const file = path.join(dir, `screenshot-${Date.now()}.png`);
+        fs.mkdirSync(dir, { recursive: true });
+        runPs(`
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bmp.Save('${file.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png)
+        `)
+          .then(() => console.log('Screenshot saved:', file))
+          .catch(e => console.error('Screenshot failed:', e.message));
+      } else {
+        const dir  = `${os.homedir()}/Pictures/Screenshots`;
+        const file = `${dir}/screenshot-${Date.now()}.png`;
+        fs.mkdirSync(dir, { recursive: true });
+        run(`osascript -e 'do shell script "screencapture -x \\"${file}\\""'`)
+          .then(() => console.log('Screenshot saved:', file))
+          .catch(e => console.error('Screenshot failed:', e.message));
+      }
       break;
     }
   }
@@ -303,13 +529,11 @@ async function handleAction(action, payload = {}) {
 
 // ─── All installed apps ───────────────────────────────────────────────────────
 let allAppsCache = null;
-function getAllApps() {
-  if (allAppsCache) return allAppsCache;
+
+function getAllAppsMac() {
   const dirs = [
-    '/Applications',
-    '/Applications/Utilities',
-    '/System/Applications',
-    '/System/Applications/Utilities',
+    '/Applications', '/Applications/Utilities',
+    '/System/Applications', '/System/Applications/Utilities',
     `${os.homedir()}/Applications`,
   ];
   const seen = new Set();
@@ -326,12 +550,55 @@ function getAllApps() {
         });
     } catch {}
   }
-  apps.sort((a, b) => a.name.localeCompare(b.name));
-  allAppsCache = apps;
-  // Bust cache every 5 min in case user installs something
-  setTimeout(() => { allAppsCache = null; }, 5 * 60 * 1000);
   return apps;
 }
+
+async function getAllAppsWin() {
+  // Scan Start Menu shortcuts (covers most installed apps)
+  const dirs = [
+    `${process.env.ProgramData || 'C:\\ProgramData'}\\Microsoft\\Windows\\Start Menu\\Programs`,
+    `${os.homedir()}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs`,
+  ];
+  const seen = new Set();
+  const apps = [];
+  for (const dir of dirs) {
+    try {
+      const scanDir = (d) => {
+        for (const f of fs.readdirSync(d)) {
+          const full = path.join(d, f);
+          try {
+            const stat = fs.statSync(full);
+            if (stat.isDirectory()) { scanDir(full); continue; }
+            if (f.endsWith('.lnk')) {
+              const name = f.replace(/\.lnk$/, '');
+              if (!seen.has(name) && !name.startsWith('Uninstall') && !name.startsWith('uninstall')) {
+                seen.add(name);
+                apps.push({ name, appPath: full, appName: name });
+              }
+            }
+          } catch {}
+        }
+      };
+      scanDir(dir);
+    } catch {}
+  }
+  return apps;
+}
+
+function getAllApps() {
+  if (allAppsCache) return allAppsCache;
+  const result = IS_WIN ? getAllAppsWin() : getAllAppsMac();
+  // result may be a Promise (Win) or array (Mac) — normalise
+  Promise.resolve(result).then(apps => {
+    apps.sort((a, b) => a.name.localeCompare(b.name));
+    allAppsCache = apps;
+    setTimeout(() => { allAppsCache = null; }, 5 * 60 * 1000);
+  });
+  // Synchronously return whatever we have (may be [] on first win call)
+  return allAppsCache || [];
+}
+// Warm up cache on start
+if (IS_WIN) getAllApps();
 
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 const MIME = {
@@ -346,15 +613,17 @@ const server = http.createServer(async (req, res) => {
 
   if (urlPath === '/config.json') {
     res.writeHead(200, { 'Content-Type': MIME['.json'] });
-    return res.end(JSON.stringify({ macAddress: MAC_ADDRESS, version: SERVER_VERSION }));
+    return res.end(JSON.stringify({ macAddress: MAC_ADDRESS, version: SERVER_VERSION, platform: process.platform }));
   }
   if (urlPath === '/api/version') {
     res.writeHead(200, { 'Content-Type': MIME['.json'] });
     return res.end(JSON.stringify({ version: SERVER_VERSION }));
   }
   if (urlPath === '/api/all-apps') {
+    const apps = await Promise.resolve(IS_WIN ? getAllAppsWin() : getAllAppsMac());
+    apps.sort((a, b) => a.name.localeCompare(b.name));
     res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'max-age=300' });
-    return res.end(JSON.stringify({ apps: getAllApps() }));
+    return res.end(JSON.stringify({ apps }));
   }
   if (urlPath === '/api/running-apps') {
     const apps = await getRunningApps();
@@ -407,15 +676,15 @@ async function pollApps() {
 }
 setInterval(pollApps, 3000);
 
-// ─── Caffeinate: keep Mac awake while phone is connected ──────────────────────
+// ─── Caffeinate: keep Mac awake while phone is connected (macOS only) ─────────
 let caffeinateProc = null, connectionCount = 0;
 function startCaffeinate() {
-  if (caffeinateProc) return;
+  if (!IS_MAC || caffeinateProc) return;
   caffeinateProc = exec('caffeinate -d -i -u');
   console.log('☕  Caffeinate started');
 }
 function stopCaffeinate() {
-  if (!caffeinateProc) return;
+  if (!IS_MAC || !caffeinateProc) return;
   caffeinateProc.kill(); caffeinateProc = null;
   console.log('💤  Caffeinate stopped');
 }
@@ -456,7 +725,9 @@ function getLocalIP() {
 }
 
 server.listen(PORT, () => {
-  console.log('\n🎛️  Mac Deck running!\n');
+  const platform = IS_WIN ? 'Windows' : IS_MAC ? 'macOS' : process.platform;
+  console.log(`\n🎛️  Mac Deck running on ${platform}!\n`);
   console.log(`   WiFi  →  http://${getLocalIP()}:${PORT}`);
   console.log(`   USB   →  http://localhost:${PORT}   (adb reverse tcp:${PORT} tcp:${PORT})\n`);
+  if (IS_WIN) console.log('   Tip: make sure Node.js is in PATH and run as your normal user account.\n');
 });

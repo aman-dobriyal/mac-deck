@@ -382,6 +382,86 @@
     }
     #wol-copied.show { opacity: 1; }
 
+    /* ── Server switcher status bar pill ────────────────────────────────── */
+    #server-pill {
+      display: flex; align-items: center; gap: 5px;
+      background: var(--card2); border-radius: 20px;
+      padding: 4px 10px 4px 8px;
+      font-size: 12px; font-weight: 600; color: var(--text2);
+      cursor: pointer; border: none;
+      transition: background 0.15s, color 0.15s;
+      max-width: 140px; overflow: hidden;
+    }
+    #server-pill:active { background: var(--fill); }
+    #server-pill-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0;
+    }
+    #server-pill-name {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── Server switcher sheet ───────────────────────────────────────────── */
+    #srv-sheet {
+      display: none; position: fixed; inset: 0; z-index: 100;
+    }
+    #srv-sheet.show { display: flex; flex-direction: column; justify-content: flex-end; }
+    #srv-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(6px);
+    }
+    #srv-panel {
+      position: relative; background: #1c1c1e;
+      border-radius: 20px 20px 0 0;
+      padding: 20px 0 calc(16px + var(--safe-bot));
+    }
+    #srv-handle { width: 36px; height: 4px; background: var(--fill); border-radius: 2px; margin: 0 auto 18px; }
+    #srv-title {
+      font-size: 15px; font-weight: 600; text-align: center;
+      padding: 0 20px 14px; color: var(--text);
+    }
+    .srv-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 20px; cursor: pointer; transition: background 0.1s;
+    }
+    .srv-item:active { background: rgba(255,255,255,0.06); }
+    .srv-item-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: var(--card2); flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .srv-item-info { flex: 1; min-width: 0; }
+    .srv-item-name { font-size: 15px; font-weight: 600; }
+    .srv-item-url  { font-size: 12px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .srv-item-check { color: var(--accent); font-size: 18px; font-weight: 700; flex-shrink: 0; }
+    .srv-item-del {
+      background: none; border: none; color: var(--text3);
+      font-size: 18px; cursor: pointer; padding: 4px 2px; line-height: 1;
+      flex-shrink: 0;
+    }
+    .srv-item-del:active { color: var(--red); }
+    #srv-add-row {
+      margin: 8px 20px 0;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    #srv-add-row input {
+      background: var(--card2); border: none; border-radius: 10px;
+      color: var(--text); font-size: 15px; padding: 10px 14px;
+      outline: none; width: 100%;
+    }
+    #srv-add-row input::placeholder { color: var(--text3); }
+    #srv-add-btn {
+      background: var(--accent); border: none; color: #fff;
+      font-size: 14px; font-weight: 600; padding: 12px;
+      border-radius: 12px; cursor: pointer; transition: opacity 0.15s;
+    }
+    #srv-add-btn:active { opacity: 0.75; }
+    #srv-platform-badge {
+      text-align: center; font-size: 11px; color: var(--text3);
+      padding: 8px 20px 0;
+    }
+
     /* ── Toast ────────────────────────────────────────────────────────────── */
     #toast {
       position: fixed;
@@ -440,6 +520,10 @@
     <span id="conn-dot"></span>
     <span id="conn-label">Connecting</span>
   </div>
+  <button id="server-pill" aria-label="Switch server">
+    <span id="server-pill-dot"></span>
+    <span id="server-pill-name">This Mac</span>
+  </button>
   <button id="fs-btn" aria-label="Fullscreen">
     <svg class="ico" width="20" height="20"><use href="#i-maximize"/></svg>
   </button>
@@ -574,6 +658,22 @@
       <input id="picker-search" type="search" placeholder="Search apps…" autocomplete="off">
     </div>
     <div id="picker-list"></div>
+  </div>
+</div>
+
+<!-- ── Server switcher sheet ────────────────────────────────────────────────── -->
+<div id="srv-sheet">
+  <div id="srv-backdrop"></div>
+  <div id="srv-panel">
+    <div id="srv-handle"></div>
+    <div id="srv-title">Servers</div>
+    <div id="srv-list"></div>
+    <div id="srv-add-row">
+      <input id="srv-name-input"  type="text"   placeholder="Name  (e.g. Windows PC)">
+      <input id="srv-url-input"   type="url"    placeholder="URL   (e.g. http://192.168.1.5:3333)">
+      <button id="srv-add-btn">Add Server</button>
+    </div>
+    <div id="srv-platform-badge"></div>
   </div>
 </div>
 
@@ -762,11 +862,6 @@ function renderApps() {
   });
 }
 
-
-fetch('/config.json').then(r => r.json()).then(cfg => {
-  if (cfg.macAddress) { wolMac = cfg.macAddress; localStorage.setItem('mac-deck-mac', cfg.macAddress); }
-  if (cfg.version && !knownVersion) knownVersion = cfg.version;
-}).catch(() => {});
 
 /* ── Sliders ──────────────────────────────────────────────────────────────── */
 function paintSlider(el, val, color = 'var(--accent)') {
@@ -1102,10 +1197,135 @@ if (window.visualViewport) {
 // Initial render
 renderDock();
 
+/* ── Server switcher ──────────────────────────────────────────────────────── */
+// A server entry: { name, url }
+// The "current" server is the one we loaded from (location.origin).
+// Saved extras live in localStorage under 'mac-deck-servers'.
+
+const CURRENT_ORIGIN = location.origin;  // e.g. http://192.168.1.10:3333
+let savedServers = [];
+try { savedServers = JSON.parse(localStorage.getItem('mac-deck-servers') || '[]'); } catch {}
+
+// Server platform badge updated when /config.json is fetched
+let serverPlatform = null;
+
+function platformLabel(p) {
+  if (p === 'darwin') return '🍎 macOS';
+  if (p === 'win32')  return '🪟 Windows';
+  return p ? `🖥 ${p}` : '';
+}
+
+function renderServerPill() {
+  const pill = $('server-pill');
+  // Find a saved name for the current origin
+  const saved = savedServers.find(s => s.url === CURRENT_ORIGIN);
+  const name = saved?.name || (serverPlatform === 'win32' ? 'Windows PC' : serverPlatform === 'darwin' ? 'This Mac' : 'Server');
+  $('server-pill-name').textContent = name;
+}
+
+function renderServerList() {
+  const list = $('srv-list');
+  list.innerHTML = '';
+
+  // Always show current server first
+  const current = savedServers.find(s => s.url === CURRENT_ORIGIN) ||
+                  { name: serverPlatform === 'win32' ? 'Windows PC' : 'This Mac', url: CURRENT_ORIGIN };
+
+  const allToShow = [current, ...savedServers.filter(s => s.url !== CURRENT_ORIGIN)];
+
+  allToShow.forEach(srv => {
+    const isCurrent = srv.url === CURRENT_ORIGIN;
+    const row = document.createElement('div');
+    row.className = 'srv-item';
+
+    const icon = document.createElement('div');
+    icon.className = 'srv-item-icon';
+    icon.textContent = srv.url.includes(':3333') ? (isCurrent && serverPlatform === 'win32' ? '🪟' : isCurrent ? '🍎' : '🖥') : '🖥';
+
+    const info = document.createElement('div');
+    info.className = 'srv-item-info';
+    const nameLine = document.createElement('div');
+    nameLine.className = 'srv-item-name';
+    nameLine.textContent = srv.name;
+    const urlLine = document.createElement('div');
+    urlLine.className = 'srv-item-url';
+    urlLine.textContent = srv.url;
+    info.appendChild(nameLine);
+    info.appendChild(urlLine);
+
+    row.appendChild(icon);
+    row.appendChild(info);
+
+    if (isCurrent) {
+      const check = document.createElement('div');
+      check.className = 'srv-item-check';
+      check.textContent = '✓';
+      row.appendChild(check);
+    } else {
+      const del = document.createElement('button');
+      del.className = 'srv-item-del';
+      del.textContent = '×';
+      del.title = 'Remove';
+      del.addEventListener('click', e => {
+        e.stopPropagation();
+        savedServers = savedServers.filter(s => s.url !== srv.url);
+        localStorage.setItem('mac-deck-servers', JSON.stringify(savedServers));
+        renderServerList();
+        vibrate(20);
+      });
+      row.appendChild(del);
+      // Tap to switch
+      row.addEventListener('click', () => {
+        vibrate(30);
+        window.location.href = srv.url;
+      });
+    }
+
+    list.appendChild(row);
+  });
+
+  // Platform badge for current server
+  const badge = $('srv-platform-badge');
+  badge.textContent = serverPlatform ? `Connected to: ${platformLabel(serverPlatform)}` : '';
+}
+
+$('server-pill').addEventListener('click', () => {
+  renderServerList();
+  $('srv-sheet').classList.add('show');
+  vibrate(20);
+});
+
+$('srv-backdrop').addEventListener('click', () => $('srv-sheet').classList.remove('show'));
+
+$('srv-add-btn').addEventListener('click', () => {
+  const name = $('srv-name-input').value.trim();
+  let url    = $('srv-url-input').value.trim();
+  if (!name || !url) { showToast('Enter a name and URL'); return; }
+  if (!url.startsWith('http')) url = 'http://' + url;
+  if (!savedServers.find(s => s.url === url)) {
+    savedServers.push({ name, url });
+    localStorage.setItem('mac-deck-servers', JSON.stringify(savedServers));
+  }
+  $('srv-name-input').value = '';
+  $('srv-url-input').value  = '';
+  renderServerList();
+  showToast(`${name} saved — tap to connect`);
+  vibrate(30);
+});
+
+// Grab platform from config.json (already fetched above — hook into its .then)
+// We update serverPlatform and re-render the pill
+fetch('/config.json').then(r => r.json()).then(cfg => {
+  if (cfg.macAddress) { wolMac = cfg.macAddress; localStorage.setItem('mac-deck-mac', cfg.macAddress); }
+  if (cfg.version && !knownVersion) knownVersion = cfg.version;
+  if (cfg.platform) { serverPlatform = cfg.platform; renderServerPill(); }
+}).catch(() => {});
+
 /* ── Service Worker ───────────────────────────────────────────────────────── */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 /* ── Boot ─────────────────────────────────────────────────────────────────── */
+renderServerPill();
 connect();
 </script>
 </body>
